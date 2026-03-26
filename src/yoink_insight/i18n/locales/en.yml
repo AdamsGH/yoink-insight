@@ -1,0 +1,35 @@
+commands:
+  - {command: about,          description: "Describe a YouTube video",    scope: default}
+  - {command: summary,        description: "Summarize a YouTube video",   scope: default}
+  - {command: insight_lang,   description: "Set Insight language",        scope: private}
+  - {command: insight_grant,  description: "Grant Insight access",        scope: private, min_role: admin}
+  - {command: insight_revoke, description: "Revoke Insight access",       scope: private, min_role: admin}
+  - {command: insight_list,   description: "List Insight access",         scope: private, min_role: admin}
+
+help_sections:
+  insight:
+    title: "AI Insights"
+  admin_insight:
+    title: "Insight Admin"
+
+insight:
+  thinking: "🤔 Thinking..."
+  no_url: "Please provide a YouTube URL."
+  not_youtube: "Only YouTube URLs are supported."
+  no_access: "You don't have access to this feature."
+  error: "Failed to get response from Gemini: {error}"
+  about_header: "📺 <b>About this video</b>"
+  summary_header: "📋 <b>Summary</b>"
+
+insight_lang:
+  current: "Current language: <b>{lang}</b>"
+  changed: "Language set to <b>{lang}</b> ✅"
+  no_access: "You don't have Insight access."
+
+insight_access:
+  granted: "✅ Insight access granted to user {user_id} (lang: {lang})"
+  revoked: "🗑 Insight access revoked for user {user_id}"
+  not_found: "User {user_id} not found in Insight access list."
+  list_empty: "No users have Insight access."
+  list_header: "Users with Insight access:"
+  list_item: "• <code>{user_id}</code> lang={lang} granted by {granted_by}"

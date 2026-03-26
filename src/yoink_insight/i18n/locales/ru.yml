@@ -1,0 +1,35 @@
+commands:
+  - {command: about,          description: "Описание YouTube видео",          scope: default}
+  - {command: summary,        description: "Краткое содержание YouTube видео", scope: default}
+  - {command: insight_lang,   description: "Язык ответов Insight",            scope: private}
+  - {command: insight_grant,  description: "Выдать доступ к Insight",         scope: private, min_role: admin}
+  - {command: insight_revoke, description: "Отозвать доступ к Insight",       scope: private, min_role: admin}
+  - {command: insight_list,   description: "Список доступа к Insight",        scope: private, min_role: admin}
+
+help_sections:
+  insight:
+    title: "AI Аналитика"
+  admin_insight:
+    title: "Управление Insight"
+
+insight:
+  thinking: "🤔 Думаю..."
+  no_url: "Укажите ссылку на YouTube видео."
+  not_youtube: "Поддерживаются только ссылки YouTube."
+  no_access: "У вас нет доступа к этой функции."
+  error: "Не удалось получить ответ от Gemini: {error}"
+  about_header: "📺 <b>О видео</b>"
+  summary_header: "📋 <b>Краткое содержание</b>"
+
+insight_lang:
+  current: "Текущий язык: <b>{lang}</b>"
+  changed: "Язык установлен: <b>{lang}</b> ✅"
+  no_access: "У вас нет доступа к Insight."
+
+insight_access:
+  granted: "✅ Доступ к Insight выдан пользователю {user_id} (язык: {lang})"
+  revoked: "🗑 Доступ к Insight отозван у пользователя {user_id}"
+  not_found: "Пользователь {user_id} не найден в списке доступа Insight."
+  list_empty: "Нет пользователей с доступом к Insight."
+  list_header: "Пользователи с доступом к Insight:"
+  list_item: "• <code>{user_id}</code> lang={lang} выдал {granted_by}"

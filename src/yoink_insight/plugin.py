@@ -1,0 +1,152 @@
+"""InsightPlugin - implements YoinkPlugin protocol."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import APIRouter
+
+from yoink.core.plugin import (
+    InlineHandlerSpec,
+    JobSpec,
+    PluginContext,
+    SidebarEntry,
+    WebManifest,
+    WebPage,
+)
+from yoink_insight.config import InsightConfig
+
+
+class InsightPlugin:
+    name = "insight"
+    version = "0.1.0"
+
+    def __init__(self) -> None:
+        self._config = InsightConfig()
+
+    def get_config_class(self) -> type[InsightConfig]:
+        return InsightConfig
+
+    def get_models(self) -> list:
+        from yoink_insight.storage.models import InsightAccess
+        return [InsightAccess]
+
+    def get_handlers(self) -> list:
+        from yoink_insight.commands import get_handler_specs
+        return get_handler_specs()
+
+    def get_inline_handlers(self) -> list[InlineHandlerSpec]:
+        return []
+
+    def get_routes(self) -> APIRouter | None:
+        from yoink_insight.api.router import router
+        return router
+
+    def get_locale_dir(self) -> Path | None:
+        return Path(__file__).parent / "i18n" / "locales"
+
+    def get_web_manifest(self) -> WebManifest:
+        return WebManifest(pages=[
+            WebPage(
+                path="/insight/settings",
+                sidebar=SidebarEntry(
+                    label="AI Settings",
+                    icon="Brain",
+                    path="/insight/settings",
+                    section="main",
+                ),
+            ),
+            WebPage(
+                path="/admin/insight-access",
+                sidebar=SidebarEntry(
+                    label="Insight Access",
+                    icon="Key",
+                    path="/admin/insight-access",
+                    section="admin",
+                    min_role="admin",
+                ),
+            ),
+        ])
+
+    def get_commands(self) -> list:
+        import yaml
+        from yoink.core.plugin import CommandSpec
+
+        locales_dir = Path(__file__).parent / "i18n" / "locales"
+        en_data = yaml.safe_load((locales_dir / "en.yml").read_text())
+
+        lang_descriptions: dict[str, dict[str, str]] = {}
+        for locale_file in locales_dir.glob("*.yml"):
+            lang = locale_file.stem
+            if lang == "en":
+                continue
+            try:
+                loc_data = yaml.safe_load(locale_file.read_text())
+                for entry in (loc_data.get("commands") or []):
+                    cmd = entry.get("command")
+                    desc = entry.get("description")
+                    if cmd and desc:
+                        lang_descriptions.setdefault(cmd, {})[lang] = desc
+            except Exception:
+                pass
+
+        return [
+            CommandSpec(
+                command=entry["command"],
+                description=entry["description"],
+                min_role=entry.get("min_role", "user"),
+                scope=entry.get("scope", "default"),
+                descriptions=lang_descriptions.get(entry["command"], {}),
+            )
+            for entry in (en_data.get("commands") or [])
+        ]
+
+    def get_help_section(self, role: str, lang: str) -> str:
+        import yaml
+        from yoink.core.plugin import CommandSpec
+
+        _ROLE_RANK = {"user": 0, "moderator": 1, "admin": 2, "owner": 3}
+        rank = _ROLE_RANK.get(role, 0)
+
+        locale_file = Path(__file__).parent / "i18n" / "locales" / "en.yml"
+        data = yaml.safe_load(locale_file.read_text())
+        sections_cfg = data.get("help_sections", {})
+
+        cmds: list[CommandSpec] = self.get_commands()
+        visible = [c for c in cmds if _ROLE_RANK.get(c.min_role, 0) <= rank]
+
+        _SECTION_ORDER = [
+            ("user",  "insight",       ("default", "private")),
+            ("admin", "admin_insight", ("default", "private")),
+        ]
+
+        parts: list[str] = []
+        for min_role, section_key, scopes in _SECTION_ORDER:
+            if _ROLE_RANK.get(min_role, 0) > rank:
+                continue
+            sec_cmds = [
+                c for c in visible
+                if c.min_role == min_role and c.scope in scopes
+            ]
+            if not sec_cmds:
+                continue
+            title = sections_cfg.get(section_key, {}).get("title", section_key.title())
+            lines = [f"/{c.command}  - {c.description}" for c in sec_cmds]
+            body = "\n".join(lines)
+            is_secondary = min_role != "user"
+            if is_secondary:
+                parts.append(f"<blockquote expandable><b>{title}</b>\n{body}</blockquote>")
+            else:
+                parts.append(f"<b>{title}</b>\n{body}")
+
+        return "\n\n".join(parts)
+
+    def get_jobs(self) -> list[JobSpec] | None:
+        return None
+
+    async def setup(self, ctx: PluginContext) -> None:
+        """Populate bot_data with insight-specific services."""
+        from yoink_insight.storage.repos import InsightAccessRepo
+
+        config = self._config
+        ctx.bot_data["insight_config"] = config
+        ctx.bot_data["insight_repo"] = InsightAccessRepo(ctx.session_factory)
