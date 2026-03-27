@@ -24,7 +24,7 @@ from yoink_insight.api.schemas import (
 from yoink_insight.config import InsightConfig
 from yoink_insight.storage.models import InsightAccess, InsightUserSettings
 
-router = APIRouter(tags=["insight"])
+router = APIRouter(tags=["insight"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
 
 def _is_owner(user: User) -> bool:
@@ -82,7 +82,7 @@ async def _get_or_create_owner_row(
     return row
 
 
-@router.get("/access/lookup", response_model=list[UserLookupResult])
+@router.get("/access/lookup", response_model=list[UserLookupResult], summary="Search users for access grant (admin+)")
 async def lookup_users(
     q: str = Query(..., min_length=1),
     session: AsyncSession = Depends(get_db),
@@ -102,7 +102,7 @@ async def lookup_users(
     ]
 
 
-@router.get("/access", response_model=list[InsightAccessResponse])
+@router.get("/access", response_model=list[InsightAccessResponse], summary="List users with AI summary access (admin+)")
 async def list_insight_access(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
@@ -115,7 +115,7 @@ async def list_insight_access(
     return await _enrich(session, list(rows))
 
 
-@router.post("/access/{uid}", response_model=InsightAccessResponse, status_code=201)
+@router.post("/access/{uid}", response_model=InsightAccessResponse, status_code=201, summary="Grant AI summary access to user (admin+)")
 async def grant_insight_access(
     uid: int,
     body: InsightAccessGrant,
@@ -146,7 +146,7 @@ async def grant_insight_access(
     return enriched[0]
 
 
-@router.patch("/access/{uid}", response_model=InsightAccessResponse)
+@router.patch("/access/{uid}", response_model=InsightAccessResponse, summary="Update AI summary access settings (admin+)")
 async def update_insight_access(
     uid: int,
     body: InsightSettingsUpdate,
@@ -163,7 +163,7 @@ async def update_insight_access(
     return enriched[0]
 
 
-@router.delete("/access/{uid}", status_code=204)
+@router.delete("/access/{uid}", status_code=204, summary="Revoke AI summary access (admin+)")
 async def revoke_insight_access(
     uid: int,
     session: AsyncSession = Depends(get_db),
@@ -199,7 +199,7 @@ async def _has_insight_access(session: AsyncSession, user: User) -> bool:
     return legacy is not None
 
 
-@router.get("/settings/me", response_model=InsightUserSettingsResponse)
+@router.get("/settings/me", response_model=InsightUserSettingsResponse, summary="My AI summary settings")
 async def get_my_insight_settings(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -211,7 +211,7 @@ async def get_my_insight_settings(
     return InsightUserSettingsResponse(lang=lang, has_access=has_access)
 
 
-@router.patch("/settings/me", response_model=InsightUserSettingsResponse)
+@router.patch("/settings/me", response_model=InsightUserSettingsResponse, summary="Update my AI summary settings", description="Fields: `language` (override summary language, null = use user locale), `detail_level` (`brief`/`detailed`).")
 async def update_my_insight_settings(
     body: InsightSettingsUpdate,
     session: AsyncSession = Depends(get_db),
