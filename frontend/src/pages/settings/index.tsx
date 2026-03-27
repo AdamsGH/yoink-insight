@@ -44,7 +44,7 @@ export default function InsightSettingsPage() {
         setData(res.data)
         setLang(res.data.lang)
       })
-      .catch(() => toast.error(t('common.load_error')))
+      .catch(() => {}) // silently handle - page renders locked state for no-access
       .finally(() => setLoading(false))
   }, [t])
 
