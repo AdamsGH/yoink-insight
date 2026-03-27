@@ -6,22 +6,99 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_current_user, get_db
 from yoink.core.api.exceptions import NotFoundError
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
-from yoink_insight.config import InsightConfig
 from yoink_insight.api.schemas import (
     InsightAccessGrant,
     InsightAccessResponse,
     InsightSettingsUpdate,
+    UserLookupResult,
 )
+from yoink_insight.config import InsightConfig
 from yoink_insight.storage.models import InsightAccess
 
 router = APIRouter(tags=["insight"])
+
+
+def _is_owner(user: User) -> bool:
+    return user.role == UserRole.owner
+
+
+def _display(user: User) -> str:
+    if user.username:
+        return f"@{user.username}"
+    return user.first_name or str(user.id)
+
+
+async def _enrich(
+    session: AsyncSession, rows: list[InsightAccess]
+) -> list[InsightAccessResponse]:
+    """Attach username/first_name to a list of InsightAccess rows."""
+    all_ids = {r.user_id for r in rows} | {r.granted_by for r in rows}
+    users_map: dict[int, User] = {}
+    if all_ids:
+        result = await session.execute(select(User).where(User.id.in_(all_ids)))
+        for u in result.scalars():
+            users_map[u.id] = u
+
+    out = []
+    for r in rows:
+        u = users_map.get(r.user_id)
+        g = users_map.get(r.granted_by)
+        out.append(InsightAccessResponse(
+            user_id=r.user_id,
+            lang=r.lang,
+            granted_by=r.granted_by,
+            granted_at=r.granted_at,
+            username=u.username if u else None,
+            first_name=u.first_name if u else None,
+            granted_by_username=g.username if g else None,
+        ))
+    return out
+
+
+async def _get_or_create_owner_row(
+    session: AsyncSession, user: User
+) -> InsightAccess:
+    row = await session.get(InsightAccess, user.id)
+    if row is None:
+        config = InsightConfig()
+        row = InsightAccess(
+            user_id=user.id,
+            lang=config.insight_default_lang,
+            granted_by=user.id,
+            granted_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+    return row
+
+
+@router.get("/access/lookup", response_model=list[UserLookupResult])
+async def lookup_users(
+    q: str = Query(..., min_length=1),
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> list[UserLookupResult]:
+    """Search users by username or numeric ID. Returns up to 20 results."""
+    term = q.lstrip("@")
+    stmt = select(User).limit(20)
+    if term.isdigit():
+        stmt = stmt.where(User.id == int(term))
+    else:
+        stmt = stmt.where(User.username.ilike(f"%{term}%"))
+    result = await session.execute(stmt)
+    return [
+        UserLookupResult(id=u.id, username=u.username, first_name=u.first_name)
+        for u in result.scalars()
+    ]
 
 
 @router.get("/access", response_model=list[InsightAccessResponse])
@@ -29,12 +106,12 @@ async def list_insight_access(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> list[InsightAccessResponse]:
-    from sqlalchemy import select
-
     rows = (
-        await session.execute(select(InsightAccess).order_by(InsightAccess.granted_at))
+        await session.execute(
+            select(InsightAccess).order_by(InsightAccess.granted_at)
+        )
     ).scalars().all()
-    return [InsightAccessResponse.model_validate(r) for r in rows]
+    return await _enrich(session, list(rows))
 
 
 @router.post("/access/{uid}", response_model=InsightAccessResponse, status_code=201)
@@ -44,13 +121,9 @@ async def grant_insight_access(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> InsightAccessResponse:
-    from yoink.core.db.models import User as CoreUser
-
-    db_user = await session.get(CoreUser, uid)
+    db_user = await session.get(User, uid)
     if db_user is None:
-        db_user = CoreUser(id=uid)
-        session.add(db_user)
-        await session.flush()
+        raise NotFoundError(f"User {uid} not found")
 
     row = await session.get(InsightAccess, uid)
     if row is None:
@@ -68,7 +141,25 @@ async def grant_insight_access(
 
     await session.commit()
     await session.refresh(row)
-    return InsightAccessResponse.model_validate(row)
+    enriched = await _enrich(session, [row])
+    return enriched[0]
+
+
+@router.patch("/access/{uid}", response_model=InsightAccessResponse)
+async def update_insight_access(
+    uid: int,
+    body: InsightSettingsUpdate,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> InsightAccessResponse:
+    row = await session.get(InsightAccess, uid)
+    if row is None:
+        raise NotFoundError(f"No insight access entry for user {uid}")
+    row.lang = body.lang
+    await session.commit()
+    await session.refresh(row)
+    enriched = await _enrich(session, [row])
+    return enriched[0]
 
 
 @router.delete("/access/{uid}", status_code=204)
@@ -84,29 +175,6 @@ async def revoke_insight_access(
     await session.commit()
 
 
-def _is_owner(user: User) -> bool:
-    return user.role == UserRole.owner
-
-
-async def _get_or_create_owner_row(
-    session: AsyncSession, user: User
-) -> InsightAccess:
-    """Auto-create an insight_access row for owner if one doesn't exist yet."""
-    row = await session.get(InsightAccess, user.id)
-    if row is None:
-        config = InsightConfig()
-        row = InsightAccess(
-            user_id=user.id,
-            lang=config.insight_default_lang,
-            granted_by=user.id,
-            granted_at=datetime.now(timezone.utc),
-        )
-        session.add(row)
-        await session.commit()
-        await session.refresh(row)
-    return row
-
-
 @router.get("/settings/me", response_model=InsightAccessResponse)
 async def get_my_insight_settings(
     session: AsyncSession = Depends(get_db),
@@ -114,12 +182,14 @@ async def get_my_insight_settings(
 ) -> InsightAccessResponse:
     if _is_owner(current_user):
         row = await _get_or_create_owner_row(session, current_user)
-        return InsightAccessResponse.model_validate(row)
+        enriched = await _enrich(session, [row])
+        return enriched[0]
 
     row = await session.get(InsightAccess, current_user.id)
     if row is None:
         raise HTTPException(status_code=404, detail="You do not have Insight access.")
-    return InsightAccessResponse.model_validate(row)
+    enriched = await _enrich(session, [row])
+    return enriched[0]
 
 
 @router.patch("/settings/me", response_model=InsightAccessResponse)
@@ -138,4 +208,5 @@ async def update_my_insight_settings(
     row.lang = body.lang
     await session.commit()
     await session.refresh(row)
-    return InsightAccessResponse.model_validate(row)
+    enriched = await _enrich(session, [row])
+    return enriched[0]

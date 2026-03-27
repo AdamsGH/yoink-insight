@@ -1,11 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { apiClient } from '@core/lib/api-client'
 import { formatDate } from '@core/lib/utils'
-import type { InsightAccess } from '@insight/types'
+import type { InsightAccess, UserLookupResult } from '@insight/types'
 import { Button } from '@core/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@core/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@core/components/ui/dialog'
 import { Input } from '@core/components/ui/input'
 import { Label } from '@core/components/ui/label'
 import {
@@ -29,14 +35,34 @@ const LANG_OPTIONS = [
   { value: 'ja', label: '日本語' },
 ]
 
+function displayUser(item: InsightAccess): string {
+  if (item.username) return `@${item.username}`
+  if (item.first_name) return item.first_name
+  return String(item.user_id)
+}
+
+function displayGrantedBy(item: InsightAccess): string {
+  if (item.granted_by_username) return `@${item.granted_by_username}`
+  return String(item.granted_by)
+}
+
 export default function InsightAccessPage() {
   const [items, setItems] = useState<InsightAccess[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Grant dialog
   const [grantOpen, setGrantOpen] = useState(false)
-  const [grantUserId, setGrantUserId] = useState('')
+  const [query, setQuery] = useState('')
+  const [suggestions, setSuggestions] = useState<UserLookupResult[]>([])
+  const [selectedUser, setSelectedUser] = useState<UserLookupResult | null>(null)
   const [grantLang, setGrantLang] = useState('en')
   const [granting, setGranting] = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Inline lang edit
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editLang, setEditLang] = useState('en')
+  const [saving, setSaving] = useState(false)
 
   const [revoking, setRevoking] = useState<number | null>(null)
 
@@ -51,22 +77,39 @@ export default function InsightAccessPage() {
 
   useEffect(() => { load() }, [])
 
+  // Debounced user lookup
+  useEffect(() => {
+    if (!grantOpen) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (query.length < 1) { setSuggestions([]); return }
+    debounceRef.current = setTimeout(() => {
+      apiClient
+        .get<UserLookupResult[]>(`/insight/access/lookup?q=${encodeURIComponent(query)}`)
+        .then((r) => setSuggestions(r.data))
+        .catch(() => setSuggestions([]))
+    }, 300)
+  }, [query, grantOpen])
+
   const openGrant = () => {
-    setGrantUserId('')
+    setQuery('')
+    setSuggestions([])
+    setSelectedUser(null)
     setGrantLang('en')
     setGrantOpen(true)
   }
 
+  const selectSuggestion = (u: UserLookupResult) => {
+    setSelectedUser(u)
+    setQuery(u.username ? `@${u.username}` : u.first_name ?? String(u.id))
+    setSuggestions([])
+  }
+
   const submitGrant = async () => {
-    const uid = parseInt(grantUserId, 10)
-    if (isNaN(uid)) {
-      toast.error('Invalid user ID')
-      return
-    }
+    if (!selectedUser) { toast.error('Select a user first'); return }
     setGranting(true)
     try {
-      await apiClient.post(`/insight/access/${uid}`, { lang: grantLang })
-      toast.success(`Access granted to user ${uid}`)
+      await apiClient.post(`/insight/access/${selectedUser.id}`, { lang: grantLang })
+      toast.success(`Access granted to ${selectedUser.username ? '@' + selectedUser.username : selectedUser.id}`)
       setGrantOpen(false)
       load()
     } catch {
@@ -76,11 +119,32 @@ export default function InsightAccessPage() {
     }
   }
 
-  const revoke = async (userId: number) => {
+  const startEdit = (item: InsightAccess) => {
+    setEditingId(item.user_id)
+    setEditLang(item.lang)
+  }
+
+  const cancelEdit = () => { setEditingId(null) }
+
+  const saveEdit = async (userId: number) => {
+    setSaving(true)
+    try {
+      await apiClient.patch(`/insight/access/${userId}`, { lang: editLang })
+      toast.success('Language updated')
+      setEditingId(null)
+      load()
+    } catch {
+      toast.error('Failed to update language')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const revoke = async (userId: number, label: string) => {
     setRevoking(userId)
     try {
       await apiClient.delete(`/insight/access/${userId}`)
-      toast.success(`Access revoked for user ${userId}`)
+      toast.success(`Access revoked for ${label}`)
       load()
     } catch {
       toast.error('Failed to revoke access')
@@ -112,7 +176,7 @@ export default function InsightAccessPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>User ID</TableHead>
+                    <TableHead>User</TableHead>
                     <TableHead>Language</TableHead>
                     <TableHead>Granted By</TableHead>
                     <TableHead>Granted At</TableHead>
@@ -120,27 +184,80 @@ export default function InsightAccessPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {items.map((row) => (
-                    <TableRow key={row.user_id}>
-                      <TableCell className="font-mono text-sm">{row.user_id}</TableCell>
-                      <TableCell>{row.lang}</TableCell>
-                      <TableCell className="font-mono text-sm">{row.granted_by}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {formatDate(row.granted_at)}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:text-destructive"
-                          disabled={revoking === row.user_id}
-                          onClick={() => revoke(row.user_id)}
-                        >
-                          {revoking === row.user_id ? 'Revoking...' : 'Revoke'}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {items.map((row) => {
+                    const label = displayUser(row)
+                    const isEditing = editingId === row.user_id
+                    return (
+                      <TableRow key={row.user_id}>
+                        <TableCell>
+                          <div className="font-medium">{label}</div>
+                          {row.username && row.first_name && (
+                            <div className="text-xs text-muted-foreground">{row.first_name}</div>
+                          )}
+                          <div className="text-xs text-muted-foreground font-mono">{row.user_id}</div>
+                        </TableCell>
+                        <TableCell>
+                          {isEditing ? (
+                            <Select value={editLang} onValueChange={setEditLang}>
+                              <SelectTrigger className="w-32">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {LANG_OPTIONS.map((o) => (
+                                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <span className="text-sm">{row.lang}</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {displayGrantedBy(row)}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDate(row.granted_at)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1 justify-end">
+                            {isEditing ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  disabled={saving}
+                                  onClick={() => saveEdit(row.user_id)}
+                                >
+                                  {saving ? 'Saving...' : 'Save'}
+                                </Button>
+                                <Button size="sm" variant="ghost" onClick={cancelEdit}>
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => startEdit(row)}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={revoking === row.user_id}
+                                  onClick={() => revoke(row.user_id, label)}
+                                >
+                                  {revoking === row.user_id ? 'Revoking...' : 'Revoke'}
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -155,13 +272,43 @@ export default function InsightAccessPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="grant-uid">User ID</Label>
-              <Input
-                id="grant-uid"
-                placeholder="123456789"
-                value={grantUserId}
-                onChange={(e) => setGrantUserId(e.target.value)}
-              />
+              <Label htmlFor="grant-query">User (@username or ID)</Label>
+              <div className="relative">
+                <Input
+                  id="grant-query"
+                  placeholder="@Adams_me or 123456789"
+                  value={query}
+                  onChange={(e) => { setQuery(e.target.value); setSelectedUser(null) }}
+                  autoComplete="off"
+                />
+                {suggestions.length > 0 && (
+                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-md">
+                    {suggestions.map((u) => (
+                      <button
+                        key={u.id}
+                        type="button"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                        onClick={() => selectSuggestion(u)}
+                      >
+                        <span className="font-medium">
+                          {u.username ? `@${u.username}` : u.first_name ?? String(u.id)}
+                        </span>
+                        {u.username && u.first_name && (
+                          <span className="text-muted-foreground">{u.first_name}</span>
+                        )}
+                        <span className="ml-auto font-mono text-xs text-muted-foreground">
+                          {u.id}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {selectedUser && (
+                <p className="text-xs text-muted-foreground">
+                  Selected: {selectedUser.username ? `@${selectedUser.username}` : selectedUser.first_name} (ID: {selectedUser.id})
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Language</Label>
@@ -171,19 +318,15 @@ export default function InsightAccessPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {LANG_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setGrantOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={submitGrant} disabled={granting}>
+            <Button variant="outline" onClick={() => setGrantOpen(false)}>Cancel</Button>
+            <Button onClick={submitGrant} disabled={granting || !selectedUser}>
               {granting ? 'Granting...' : 'Grant'}
             </Button>
           </DialogFooter>
