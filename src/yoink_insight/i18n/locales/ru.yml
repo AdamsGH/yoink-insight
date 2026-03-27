@@ -9,6 +9,7 @@ commands:
 help_sections:
   insight:
     title: "AI Аналитика"
+    footer: "Команды видны только пользователям с доступом к Insight."
   admin_insight:
     title: "Управление Insight"
 
