@@ -84,7 +84,7 @@ async def _get_or_create_owner_row(
 
 @router.get("/access/lookup", response_model=list[UserLookupResult], summary="Search users for access grant (admin+)")
 async def lookup_users(
-    q: str = Query(..., min_length=1),
+    q: str = Query(..., min_length=1, description="Search query: username or display name (partial match)"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> list[UserLookupResult]:
