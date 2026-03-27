@@ -102,11 +102,19 @@ class GeminiSummarizer:
                 model=self._model,
                 contents=prompt,
             )
-            text = response.text
         except Exception as exc:
             logger.error("Gemini API error: %s", exc)
             raise InsightError("api_error") from exc
 
+        # Check for prompt-level blocks (safety, prohibited content, etc.)
+        if response.prompt_feedback and response.prompt_feedback.block_reason:
+            reason = str(response.prompt_feedback.block_reason.value).lower()
+            logger.warning("Gemini blocked prompt: %s", reason)
+            if "prohibited" in reason:
+                raise InsightError("prohibited_content")
+            raise InsightError("content_blocked")
+
+        text = response.text
         if not text or not text.strip():
             raise InsightError("empty_response")
 

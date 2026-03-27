@@ -21,6 +21,8 @@ insight:
     generic: "Failed to get a response. Please try again later."
     api_error: "Gemini API error. Please try again later."
     empty_response: "Gemini returned an empty response. Please try again."
+    prohibited_content: "This video's content was flagged by Gemini's safety filters and cannot be processed."
+    content_blocked: "The request was blocked by Gemini's safety filters. Please try a different video."
     not_youtube: "Only YouTube URLs are supported."
     transcripts_disabled: "This video has transcripts disabled."
     no_transcript: "No transcript available for this video."
