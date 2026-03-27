@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { BrainCircuit, LockKeyhole } from 'lucide-react'
 
 import { apiClient } from '@core/lib/api-client'
+import { formatDate } from '@core/lib/utils'
 import { Button } from '@core/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@core/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@core/components/ui/card'
 import { Label } from '@core/components/ui/label'
 import {
   Select,
@@ -17,6 +19,7 @@ import { toast } from '@core/components/ui/toast'
 interface InsightSettings {
   lang: string
   has_access: boolean
+  granted_at?: string | null
 }
 
 const LANG_OPTIONS = [
@@ -38,7 +41,7 @@ export default function InsightSettingsPage() {
         setData(res.data)
         setLang(res.data.lang)
       })
-      .catch(() => {}) // silently handle - page renders locked state for no-access
+      .catch(() => {})
       .finally(() => setLoading(false))
   }, [t])
 
@@ -48,7 +51,7 @@ export default function InsightSettingsPage() {
       const res = await apiClient.patch<InsightSettings>('/insight/settings/me', { lang })
       setData(res.data)
       setLang(res.data.lang)
-      toast.success(t('common.save'))
+      toast.success(t('common.saved'))
     } catch {
       toast.error(t('common.load_error'))
     } finally {
@@ -64,18 +67,52 @@ export default function InsightSettingsPage() {
 
   return (
     <div className="space-y-4">
+      {/* Access status */}
+      <Card>
+        <CardContent className="pt-5">
+          {data?.has_access ? (
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                <BrainCircuit className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">{t('insight.settings_access_active', { defaultValue: 'Access active' })}</p>
+                {data.granted_at && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('insight.settings_access_granted', { date: formatDate(data.granted_at) })}
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                <LockKeyhole className="h-4 w-4 text-muted-foreground" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">{t('insight.settings_no_access_title')}</p>
+                <p className="text-xs text-muted-foreground">{t('insight.settings_no_access_body')}</p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Language */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">{t('insight.settings_lang_title')}</CardTitle>
+          <CardTitle>{t('insight.settings_lang_title')}</CardTitle>
+          <CardDescription>{t('insight.settings_lang_hint')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {data?.has_access ? (
             <>
-              <p className="text-sm text-muted-foreground">{t('insight.settings_lang_hint')}</p>
-              <div className="space-y-1.5 max-w-xs">
+              <div className="space-y-1.5">
                 <Label>{t('insight.settings_lang_label')}</Label>
                 <Select value={lang} onValueChange={setLang}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full max-w-xs">
+                    <SelectValue />
+                  </SelectTrigger>
                   <SelectContent>
                     {LANG_OPTIONS.map((o) => (
                       <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
@@ -83,11 +120,14 @@ export default function InsightSettingsPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex justify-end pt-2">
-                <Button onClick={save} disabled={saving || !dirty} className="w-full sm:w-auto">
-                  {saving ? t('common.saving') : t('common.save')}
-                </Button>
-              </div>
+              <Button
+                onClick={save}
+                disabled={saving || !dirty}
+                size="sm"
+                className="w-full sm:w-auto"
+              >
+                {saving ? t('common.saving') : t('common.save')}
+              </Button>
             </>
           ) : (
             <p className="text-sm text-muted-foreground">{t('insight.settings_no_access_body')}</p>
