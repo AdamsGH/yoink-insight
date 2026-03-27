@@ -25,6 +25,15 @@ Transcript:
 {transcript}
 """
 
+ABOUT_PROMPT = """\
+Below is the transcript of a YouTube video. Describe what the video is about \
+in 2-3 sentences. Be concise and factual. Reply in {lang}. Output only the \
+description, no preamble.
+
+Transcript:
+{transcript}
+"""
+
 
 class InsightError(Exception):
     """Raised when summarization fails."""
@@ -86,19 +95,8 @@ class GeminiSummarizer:
         self._model = config.gemini_model
         self._lang_csv = config.insight_transcript_langs
 
-    async def summarize(self, url: str, lang: str) -> str:
-        """Return a bullet-list summary of the YouTube video at url.
-
-        Raises InsightError on any failure.
-        """
-        video_id = _extract_video_id(url)
-        if not video_id:
-            raise InsightError("not_youtube")
-
-        transcript = _fetch_transcript(video_id, self._lang_csv)
-
-        prompt = SUMMARY_PROMPT.format(transcript=transcript, lang=lang)
-
+    async def _run(self, prompt: str) -> str:
+        """Send prompt to Gemini API and return the text response."""
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model,
@@ -113,3 +111,27 @@ class GeminiSummarizer:
             raise InsightError("empty_response")
 
         return text.strip()
+
+    async def summarize(self, url: str, lang: str) -> str:
+        """Return a bullet-list summary of the YouTube video at url.
+
+        Raises InsightError on any failure.
+        """
+        video_id = _extract_video_id(url)
+        if not video_id:
+            raise InsightError("not_youtube")
+
+        transcript = _fetch_transcript(video_id, self._lang_csv)
+
+        prompt = SUMMARY_PROMPT.format(transcript=transcript, lang=lang)
+        return await self._run(prompt)
+
+    async def describe(self, url: str, lang: str) -> str:
+        """Return a 2-3 sentence description of the YouTube video at url."""
+        video_id = _extract_video_id(url)
+        if not video_id:
+            raise InsightError("not_youtube")
+
+        transcript = _fetch_transcript(video_id, self._lang_csv)
+        prompt = ABOUT_PROMPT.format(transcript=transcript, lang=lang)
+        return await self._run(prompt)
