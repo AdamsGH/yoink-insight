@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-from yoink_insight.bot.middleware import get_insight_config, get_insight_repo
+from yoink_insight.bot.middleware import get_insight_config, get_insight_settings_repo
 from yoink_insight.services.gemini import GeminiSummarizer, InsightError
 
 logger = logging.getLogger(__name__)
@@ -43,11 +43,10 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     user_id = update.effective_user.id
-    repo = get_insight_repo(context)
+    settings = get_insight_settings_repo(context)
     config = get_insight_config(context)
 
-    row = await repo.get(user_id)
-    lang = row.lang if row else config.insight_default_lang
+    lang = await settings.get_lang(user_id, default=config.insight_default_lang)
 
     args = context.args or []
     url: str | None = None

@@ -1,7 +1,7 @@
 commands:
-  - {command: about,          description: "Describe a YouTube video",    scope: default}
-  - {command: summary,        description: "Summarize a YouTube video",   scope: default}
-  - {command: insight_lang,   description: "Set Insight language",        scope: private}
+  - {command: about,          description: "Describe a YouTube video",    scope: default, required_feature: "insight:summary"}
+  - {command: summary,        description: "Summarize a YouTube video",   scope: default, required_feature: "insight:summary"}
+  - {command: insight_lang,   description: "Set Insight language",        scope: private, required_feature: "insight:summary"}
   - {command: insight_grant,  description: "Grant Insight access",        scope: private, min_role: admin}
   - {command: insight_revoke, description: "Revoke Insight access",       scope: private, min_role: admin}
   - {command: insight_list,   description: "List Insight access",         scope: private, min_role: admin}

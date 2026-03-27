@@ -16,6 +16,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class InsightUserSettings(Base):
+    """Per-user settings for the Insight plugin.
+
+    Stores preferences (e.g. summary language) separately from access grants.
+    Access is controlled by user_permissions(plugin='insight', feature='summary').
+    """
+    __tablename__ = "insight_user_settings"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    lang: Mapped[str] = mapped_column(String(8), default="en", nullable=False)
+
+
 class InsightAccess(Base):
     """Per-user allowlist entry for the Insight plugin.
 

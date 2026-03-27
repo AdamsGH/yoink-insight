@@ -7,7 +7,37 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import User
-from yoink_insight.storage.models import InsightAccess
+from yoink_insight.storage.models import InsightAccess, InsightUserSettings
+
+
+class InsightUserSettingsRepo:
+    """CRUD for insight_user_settings (language preferences)."""
+
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def get_lang(self, user_id: int, default: str = "en") -> str:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            return row.lang if row is not None else default
+
+    async def set_lang(self, user_id: int, lang: str) -> InsightUserSettings:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            if row is None:
+                # Ensure user row exists
+                user = await s.get(User, user_id)
+                if user is None:
+                    user = User(id=user_id)
+                    s.add(user)
+                    await s.flush()
+                row = InsightUserSettings(user_id=user_id, lang=lang)
+                s.add(row)
+            else:
+                row.lang = lang
+            await s.commit()
+            await s.refresh(row)
+            return row
 
 
 class InsightAccessRepo:
@@ -71,11 +101,19 @@ class InsightAccessRepo:
         return row.lang if row is not None else default
 
     async def update_lang(self, user_id: int, lang: str) -> InsightAccess | None:
+        """Update lang in insight_access (legacy) and insight_user_settings."""
         async with self._sf() as s:
             row = await s.get(InsightAccess, user_id)
-            if row is None:
-                return None
-            row.lang = lang
+            if row is not None:
+                row.lang = lang
+            # Always write to the new settings table
+            settings_row = await s.get(InsightUserSettings, user_id)
+            if settings_row is None:
+                settings_row = InsightUserSettings(user_id=user_id, lang=lang)
+                s.add(settings_row)
+            else:
+                settings_row.lang = lang
             await s.commit()
-            await s.refresh(row)
+            if row is not None:
+                await s.refresh(row)
             return row

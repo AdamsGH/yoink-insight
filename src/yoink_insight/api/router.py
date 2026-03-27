@@ -18,10 +18,11 @@ from yoink_insight.api.schemas import (
     InsightAccessGrant,
     InsightAccessResponse,
     InsightSettingsUpdate,
+    InsightUserSettingsResponse,
     UserLookupResult,
 )
 from yoink_insight.config import InsightConfig
-from yoink_insight.storage.models import InsightAccess
+from yoink_insight.storage.models import InsightAccess, InsightUserSettings
 
 router = APIRouter(tags=["insight"])
 
@@ -175,38 +176,56 @@ async def revoke_insight_access(
     await session.commit()
 
 
-@router.get("/settings/me", response_model=InsightAccessResponse)
+async def _has_insight_access(session: AsyncSession, user: User) -> bool:
+    """Check effective access: owner, user_permissions grant, or legacy insight_access row."""
+    from datetime import timezone
+    from sqlalchemy import select as sa_select
+    from yoink.core.db.models import UserPermission
+    if _is_owner(user):
+        return True
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        sa_select(UserPermission.id).where(
+            UserPermission.user_id == user.id,
+            UserPermission.plugin == "insight",
+            UserPermission.feature == "summary",
+            (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        return True
+    # Legacy fallback
+    legacy = await session.get(InsightAccess, user.id)
+    return legacy is not None
+
+
+@router.get("/settings/me", response_model=InsightUserSettingsResponse)
 async def get_my_insight_settings(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> InsightAccessResponse:
-    if _is_owner(current_user):
-        row = await _get_or_create_owner_row(session, current_user)
-        enriched = await _enrich(session, [row])
-        return enriched[0]
-
-    row = await session.get(InsightAccess, current_user.id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="You do not have Insight access.")
-    enriched = await _enrich(session, [row])
-    return enriched[0]
+) -> InsightUserSettingsResponse:
+    has_access = await _has_insight_access(session, current_user)
+    config = InsightConfig()
+    settings_row = await session.get(InsightUserSettings, current_user.id)
+    lang = settings_row.lang if settings_row else config.insight_default_lang
+    return InsightUserSettingsResponse(lang=lang, has_access=has_access)
 
 
-@router.patch("/settings/me", response_model=InsightAccessResponse)
+@router.patch("/settings/me", response_model=InsightUserSettingsResponse)
 async def update_my_insight_settings(
     body: InsightSettingsUpdate,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> InsightAccessResponse:
-    if _is_owner(current_user):
-        row = await _get_or_create_owner_row(session, current_user)
-    else:
-        row = await session.get(InsightAccess, current_user.id)
-        if row is None:
-            raise HTTPException(status_code=403, detail="You do not have Insight access.")
+) -> InsightUserSettingsResponse:
+    if not await _has_insight_access(session, current_user):
+        raise HTTPException(status_code=403, detail="You do not have Insight access.")
 
-    row.lang = body.lang
+    settings_row = await session.get(InsightUserSettings, current_user.id)
+    if settings_row is None:
+        settings_row = InsightUserSettings(user_id=current_user.id, lang=body.lang)
+        session.add(settings_row)
+    else:
+        settings_row.lang = body.lang
     await session.commit()
-    await session.refresh(row)
-    enriched = await _enrich(session, [row])
-    return enriched[0]
+    await session.refresh(settings_row)
+    return InsightUserSettingsResponse(lang=settings_row.lang, has_access=True)

@@ -1,4 +1,4 @@
-"""/insight_lang - change the response language for the current user."""
+"""/insight_lang - change the AI summary response language for the current user."""
 from __future__ import annotations
 
 import logging
@@ -9,13 +9,20 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-from yoink_insight.bot.middleware import get_insight_access, get_insight_repo, get_owner_id
+from yoink_insight.bot.middleware import get_insight_config, get_insight_settings_repo
 
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_LANGS = ["en", "ru", "uk", "de", "fr", "es", "zh", "ja"]
 
-_USER_POLICY = AccessPolicy(min_role=UserRole.user, scopes=["all"], silent_deny=False)
+# Only users who have insight/summary access can change the summary language
+_FEATURE_POLICY = AccessPolicy(
+    min_role=UserRole.user,
+    plugin="insight",
+    feature="summary",
+    scopes=["all"],
+    silent_deny=False,
+)
 
 
 def _lang_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -32,22 +39,16 @@ def _lang_keyboard(current: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
-@require_access(_USER_POLICY)
+@require_access(_FEATURE_POLICY)
 async def _cmd_insight_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
         return
 
     user_id = update.effective_user.id
-    access = get_insight_access(context)
-    repo = get_insight_repo(context)
-    owner_id = get_owner_id(context)
+    settings = get_insight_settings_repo(context)
+    config = get_insight_config(context)
 
-    if not await access.is_allowed(user_id):
-        await update.message.reply_html(t("insight_lang.no_access", "en"))
-        return
-
-    row = await repo.get(user_id)
-    current_lang = row.lang if row is not None else "en"
+    current_lang = await settings.get_lang(user_id, default=config.insight_default_lang)
 
     await update.message.reply_html(
         t("insight_lang.current", current_lang, lang=current_lang),
@@ -66,18 +67,8 @@ async def _cb_insight_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if lang not in _SUPPORTED_LANGS:
         return
 
-    access = get_insight_access(context)
-    repo = get_insight_repo(context)
-    owner_id = get_owner_id(context)
-
-    if not await access.is_allowed(user_id):
-        await query.edit_message_text(t("insight_lang.no_access", "en"))
-        return
-
-    updated = await repo.update_lang(user_id, lang)
-    if updated is None and user_id == owner_id:
-        # Owner without a row: nothing to update, just acknowledge
-        pass
+    settings = get_insight_settings_repo(context)
+    await settings.set_lang(user_id, lang)
 
     if query.message:
         await query.edit_message_text(

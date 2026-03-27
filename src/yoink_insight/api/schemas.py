@@ -28,6 +28,11 @@ class InsightSettingsUpdate(BaseModel):
     lang: str
 
 
+class InsightUserSettingsResponse(BaseModel):
+    lang: str
+    has_access: bool
+
+
 class UserLookupResult(BaseModel):
     id: int
     username: str | None
