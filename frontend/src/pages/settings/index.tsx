@@ -22,12 +22,6 @@ interface InsightSettings {
 const LANG_OPTIONS = [
   { value: 'en', label: 'English' },
   { value: 'ru', label: 'Русский' },
-  { value: 'uk', label: 'Українська' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'fr', label: 'Français' },
-  { value: 'es', label: 'Español' },
-  { value: 'zh', label: '中文' },
-  { value: 'ja', label: '日本語' },
 ] as const
 
 export default function InsightSettingsPage() {
