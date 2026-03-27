@@ -28,8 +28,8 @@ class InsightPlugin:
         return InsightConfig
 
     def get_models(self) -> list:
-        from yoink_insight.storage.models import InsightAccess, InsightUserSettings
-        return [InsightAccess, InsightUserSettings]
+        from yoink_insight.storage.models import InsightAccess, InsightUsageLog, InsightUserSettings
+        return [InsightAccess, InsightUserSettings, InsightUsageLog]
 
     def get_handlers(self) -> list:
         from yoink_insight.commands import get_handler_specs
@@ -183,15 +183,17 @@ class InsightPlugin:
     async def setup(self, ctx: PluginContext) -> None:
         """Populate bot_data with insight-specific services."""
         from yoink_insight.services.access import InsightAccessService
-        from yoink_insight.storage.repos import InsightAccessRepo, InsightUserSettingsRepo
+        from yoink_insight.storage.repos import InsightAccessRepo, InsightUsageLogRepo, InsightUserSettingsRepo
 
         config = self._config
         repo = InsightAccessRepo(ctx.session_factory)
         settings_repo = InsightUserSettingsRepo(ctx.session_factory)
+        usage_repo = InsightUsageLogRepo(ctx.session_factory)
         owner_id = ctx.config.owner_id
         access_service = InsightAccessService(repo, owner_id, ctx.session_factory)
 
         ctx.bot_data["insight_config"] = config
         ctx.bot_data["insight_repo"] = repo
         ctx.bot_data["insight_settings_repo"] = settings_repo
+        ctx.bot_data["insight_usage_repo"] = usage_repo
         ctx.bot_data["insight_access"] = access_service

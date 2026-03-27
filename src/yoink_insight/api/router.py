@@ -22,7 +22,7 @@ from yoink_insight.api.schemas import (
     UserLookupResult,
 )
 from yoink_insight.config import InsightConfig
-from yoink_insight.storage.models import InsightAccess, InsightUserSettings
+from yoink_insight.storage.models import InsightAccess, InsightUsageLog, InsightUserSettings
 
 router = APIRouter(tags=["insight"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
@@ -197,6 +197,64 @@ async def _has_insight_access(session: AsyncSession, user: User) -> bool:
     # Legacy fallback
     legacy = await session.get(InsightAccess, user.id)
     return legacy is not None
+
+
+@router.get("/me/stats", summary="My AI summary usage stats")
+async def get_my_insight_stats(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    from datetime import timedelta
+    from sqlalchemy import cast, Date, func
+
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    thirty_days_ago = now - timedelta(days=30)
+
+    base = select(func.count()).select_from(InsightUsageLog).where(
+        InsightUsageLog.user_id == current_user.id,
+        InsightUsageLog.status == "ok",
+    )
+    total = (await session.execute(base)).scalar() or 0
+    this_week = (await session.execute(
+        base.where(InsightUsageLog.created_at >= week_start)
+    )).scalar() or 0
+    today = (await session.execute(
+        base.where(InsightUsageLog.created_at >= today_start)
+    )).scalar() or 0
+
+    # By command breakdown
+    cmd_rows = (await session.execute(
+        select(InsightUsageLog.command, func.count())
+        .where(InsightUsageLog.user_id == current_user.id, InsightUsageLog.status == "ok")
+        .group_by(InsightUsageLog.command)
+    )).all()
+    by_command = {row[0]: row[1] for row in cmd_rows}
+
+    # Daily history (last 30 days)
+    day_rows = (await session.execute(
+        select(
+            cast(InsightUsageLog.created_at, Date).label("date"),
+            func.count().label("count"),
+        )
+        .where(
+            InsightUsageLog.user_id == current_user.id,
+            InsightUsageLog.status == "ok",
+            InsightUsageLog.created_at >= thirty_days_ago,
+        )
+        .group_by("date")
+        .order_by("date")
+    )).all()
+    by_day = [{"date": str(row[0]), "count": row[1]} for row in day_rows]
+
+    return {
+        "total_summaries": total,
+        "this_week": this_week,
+        "today": today,
+        "by_command": by_command,
+        "by_day": by_day,
+    }
 
 
 @router.get("/settings/me", response_model=InsightUserSettingsResponse, summary="My AI summary settings")

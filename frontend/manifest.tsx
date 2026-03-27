@@ -13,7 +13,7 @@ export const insightPlugin: PluginManifest = {
   navGroups: [
     {
       items: [
-        { label: 'AI Settings', i18nKey: 'nav.ai_settings', path: '/insight/settings', icon: <Brain className="h-4 w-4" />, requiredFeature: 'insight:summary' },
+        { label: 'AI', i18nKey: 'nav.ai', path: '/insight/settings', icon: <Brain className="h-4 w-4" />, requiredFeature: 'insight:summary' },
       ],
     },
   ],

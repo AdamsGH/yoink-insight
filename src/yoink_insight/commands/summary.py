@@ -10,8 +10,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-from yoink_insight.bot.middleware import get_insight_config, get_insight_settings_repo
-from yoink_insight.services.gemini import GeminiSummarizer, InsightError
+from yoink_insight.bot.middleware import get_insight_config, get_insight_settings_repo, get_insight_usage_repo
+from yoink_insight.services.gemini import GeminiSummarizer, InsightError, _extract_video_id
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +61,20 @@ async def _cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     thinking_msg = await update.message.reply_html(t("insight.thinking", lang))
+    usage_repo = get_insight_usage_repo(context)
+    video_id = _extract_video_id(url)
 
     try:
         summarizer = GeminiSummarizer(config)
         result = await summarizer.summarize(url, lang)
         header = t("insight.summary_header", lang)
         await thinking_msg.edit_text(f"{header}\n\n{result}", parse_mode="HTML")
+        await usage_repo.log(user_id, "summary", video_id=video_id, lang=lang, status="ok")
     except InsightError as exc:
         key = f"insight.error.{exc.args[0]}" if exc.args else "insight.error.generic"
         err_text = t(key, lang, fallback=t("insight.error.generic", lang))
         await thinking_msg.edit_text(err_text, parse_mode="HTML")
+        await usage_repo.log(user_id, "summary", video_id=video_id, lang=lang, status="error", error_code=exc.args[0] if exc.args else "generic")
 
 
 def register(app: Application) -> None:
