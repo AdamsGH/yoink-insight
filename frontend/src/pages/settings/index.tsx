@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { apiClient } from '@core/lib/api-client'
 import { formatDate } from '@core/lib/utils'
@@ -16,17 +17,12 @@ import {
 import { toast } from '@core/components/ui/toast'
 
 const LANG_OPTIONS = [
-  { value: 'en', label: 'English' },
-  { value: 'ru', label: 'Русский' },
-  { value: 'uk', label: 'Українська' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'fr', label: 'Français' },
-  { value: 'es', label: 'Español' },
-  { value: 'zh', label: '中文' },
-  { value: 'ja', label: '日本語' },
-]
+  { value: 'en', key: 'lang_en' },
+  { value: 'ru', key: 'lang_ru' },
+] as const
 
 export default function InsightSettingsPage() {
+  const { t } = useTranslation()
   const [data, setData] = useState<InsightAccess | null>(null)
   const [lang, setLang] = useState('en')
   const [loading, setLoading] = useState(true)
@@ -44,11 +40,11 @@ export default function InsightSettingsPage() {
         if (err?.response?.status === 404 || err?.response?.status === 403) {
           setNoAccess(true)
         } else {
-          toast.error('Failed to load Insight settings')
+          toast.error(t('common.load_error'))
         }
       })
       .finally(() => setLoading(false))
-  }, [])
+  }, [t])
 
   const save = async () => {
     setSaving(true)
@@ -56,9 +52,9 @@ export default function InsightSettingsPage() {
       const res = await apiClient.patch<InsightAccess>('/insight/settings/me', { lang })
       setData(res.data)
       setLang(res.data.lang)
-      toast.success('Language updated')
+      toast.success(t('common.save'))
     } catch {
-      toast.error('Failed to update language')
+      toast.error(t('common.load_error'))
     } finally {
       setSaving(false)
     }
@@ -66,19 +62,17 @@ export default function InsightSettingsPage() {
 
   if (loading) {
     return (
-      <div className="flex justify-center py-24 text-muted-foreground">Loading...</div>
+      <div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div>
     )
   }
 
   if (noAccess) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold">AI Insight Settings</h1>
+        <h1 className="text-2xl font-bold">{t('insight.settings_title')}</h1>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-muted-foreground">
-              You don't have Insight access. Ask an admin to grant it.
-            </p>
+            <p className="text-muted-foreground">{t('insight.settings_no_access_body')}</p>
           </CardContent>
         </Card>
       </div>
@@ -89,18 +83,16 @@ export default function InsightSettingsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">AI Insight Settings</h1>
+      <h1 className="text-2xl font-bold">{t('insight.settings_title')}</h1>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Response Language</CardTitle>
+          <CardTitle className="text-base">{t('insight.settings_lang_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Gemini will reply in the selected language for /about and /summary.
-          </p>
+          <p className="text-sm text-muted-foreground">{t('insight.settings_lang_hint')}</p>
           <div className="space-y-1.5 max-w-xs">
-            <Label>Language</Label>
+            <Label>{t('insight.settings_lang_label')}</Label>
             <Select value={lang} onValueChange={setLang}>
               <SelectTrigger>
                 <SelectValue />
@@ -108,7 +100,7 @@ export default function InsightSettingsPage() {
               <SelectContent>
                 {LANG_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>
-                    {o.label}
+                    {t(`insight.${o.key}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -116,12 +108,12 @@ export default function InsightSettingsPage() {
           </div>
           {data && (
             <p className="text-xs text-muted-foreground">
-              Access granted on {formatDate(data.granted_at)}
+              {t('insight.settings_access_granted', { date: formatDate(data.granted_at) })}
             </p>
           )}
           <div className="flex justify-end pt-2">
             <Button onClick={save} disabled={saving || !dirty} className="w-full sm:w-auto">
-              {saving ? 'Saving...' : 'Save'}
+              {saving ? t('common.loading') : t('common.save')}
             </Button>
           </div>
         </CardContent>
