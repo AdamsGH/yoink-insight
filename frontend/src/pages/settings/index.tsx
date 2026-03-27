@@ -5,7 +5,7 @@ import { BrainCircuit, LockKeyhole } from 'lucide-react'
 import { apiClient } from '@core/lib/api-client'
 import { formatDate } from '@core/lib/utils'
 import { Button } from '@core/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@core/components/ui/card'
+import { Card, CardContent } from '@core/components/ui/card'
 import { Label } from '@core/components/ui/label'
 import {
   Select,
@@ -66,19 +66,18 @@ export default function InsightSettingsPage() {
   const dirty = data !== null && lang !== data.lang
 
   return (
-    <div className="space-y-4">
-      {/* Access status */}
+    <div className="space-y-3">
       <Card>
-        <CardContent className="pt-5">
+        <CardContent className="pt-4 pb-4">
           {data?.has_access ? (
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                <BrainCircuit className="h-4 w-4 text-primary" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">{t('insight.settings_access_active', { defaultValue: 'Access active' })}</p>
+              <BrainCircuit className="h-5 w-5 shrink-0 text-primary" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium leading-none">
+                  {t('insight.settings_access_active', { defaultValue: 'Access active' })}
+                </p>
                 {data.granted_at && (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="mt-1 text-xs text-muted-foreground">
                     {t('insight.settings_access_granted', { date: formatDate(data.granted_at) })}
                   </p>
                 )}
@@ -86,31 +85,28 @@ export default function InsightSettingsPage() {
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
-                <LockKeyhole className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <div>
-                <p className="text-sm font-medium">{t('insight.settings_no_access_title')}</p>
-                <p className="text-xs text-muted-foreground">{t('insight.settings_no_access_body')}</p>
+              <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium leading-none">{t('insight.settings_no_access_title')}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t('insight.settings_no_access_body')}</p>
               </div>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Language */}
       <Card>
-        <CardHeader>
-          <CardTitle>{t('insight.settings_lang_title')}</CardTitle>
-          <CardDescription>{t('insight.settings_lang_hint')}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="pt-4 space-y-4">
+          <div>
+            <p className="text-sm font-medium">{t('insight.settings_lang_title')}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{t('insight.settings_lang_hint')}</p>
+          </div>
           {data?.has_access ? (
-            <>
-              <div className="space-y-1.5">
-                <Label>{t('insight.settings_lang_label')}</Label>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="space-y-1.5 flex-1 max-w-xs">
+                <Label className="text-xs text-muted-foreground">{t('insight.settings_lang_label')}</Label>
                 <Select value={lang} onValueChange={setLang}>
-                  <SelectTrigger className="w-full max-w-xs">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -128,7 +124,7 @@ export default function InsightSettingsPage() {
               >
                 {saving ? t('common.saving') : t('common.save')}
               </Button>
-            </>
+            </div>
           ) : (
             <p className="text-sm text-muted-foreground">{t('insight.settings_no_access_body')}</p>
           )}
