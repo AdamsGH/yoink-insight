@@ -22,6 +22,7 @@ _FEATURE_POLICY = AccessPolicy(
     feature="summary",
     scopes=["all"],
     silent_deny=False,
+    group_silent_deny=True,
 )
 
 

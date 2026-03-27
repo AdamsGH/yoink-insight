@@ -102,7 +102,7 @@ class InsightPlugin:
             for entry in (en_data.get("commands") or [])
         ]
 
-    def get_help_section(self, role: str, lang: str) -> str:
+    def get_help_section(self, role: str, lang: str, granted_features: set[str] | None = None) -> str:
         import yaml
         from yoink.core.plugin import CommandSpec
 
@@ -126,7 +126,15 @@ class InsightPlugin:
             return cmd_en_desc
 
         cmds: list[CommandSpec] = self.get_commands()
-        visible = [c for c in cmds if _ROLE_RANK.get(c.min_role, 0) <= rank]
+        visible = [
+            c for c in cmds
+            if _ROLE_RANK.get(c.min_role, 0) <= rank
+            and (
+                c.required_feature is None
+                or granted_features is None
+                or c.required_feature in granted_features
+            )
+        ]
 
         _SECTION_ORDER = [
             ("user",  "insight",       ("default", "private")),
