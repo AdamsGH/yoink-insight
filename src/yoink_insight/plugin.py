@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from yoink.core.plugin import (
+    FeatureSpec,
     InlineHandlerSpec,
     JobSpec,
     PluginContext,
@@ -140,13 +141,30 @@ class InsightPlugin:
 
         return "\n\n".join(parts)
 
+    def get_features(self) -> list[FeatureSpec]:
+        return [
+            FeatureSpec(
+                plugin="insight",
+                feature="summary",
+                label="AI Summary",
+                description="Access to /summary and /about commands (YouTube transcript + Gemini)",
+                default_min_role=None,  # explicit grant required; owner always passes
+            ),
+        ]
+
     def get_jobs(self) -> list[JobSpec] | None:
         return None
 
     async def setup(self, ctx: PluginContext) -> None:
         """Populate bot_data with insight-specific services."""
+        from yoink_insight.services.access import InsightAccessService
         from yoink_insight.storage.repos import InsightAccessRepo
 
         config = self._config
+        repo = InsightAccessRepo(ctx.session_factory)
+        owner_id = ctx.config.owner_id
+        access_service = InsightAccessService(repo, owner_id, ctx.session_factory)
+
         ctx.bot_data["insight_config"] = config
-        ctx.bot_data["insight_repo"] = InsightAccessRepo(ctx.session_factory)
+        ctx.bot_data["insight_repo"] = repo
+        ctx.bot_data["insight_access"] = access_service

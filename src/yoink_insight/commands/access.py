@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-from yoink_insight.bot.middleware import get_insight_config, get_insight_repo
+from yoink_insight.bot.middleware import get_insight_access, get_insight_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,8 @@ async def _cmd_insight_grant(update: Update, context: ContextTypes.DEFAULT_TYPE)
     config = get_insight_config(context)
     lang = args[1] if len(args) > 1 else config.insight_default_lang
 
-    repo = get_insight_repo(context)
-    await repo.grant(user_id, granted_by=update.effective_user.id, lang=lang)
+    access = get_insight_access(context)
+    await access.grant(user_id, granted_by=update.effective_user.id, lang=lang)
 
     await update.message.reply_html(
         t("insight_access.granted", "en", user_id=user_id, lang=lang)
@@ -57,8 +57,8 @@ async def _cmd_insight_revoke(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user_id = int(args[0])
-    repo = get_insight_repo(context)
-    removed = await repo.revoke(user_id)
+    access = get_insight_access(context)
+    removed = await access.revoke(user_id)
 
     if removed:
         await update.message.reply_html(
@@ -76,8 +76,8 @@ async def _cmd_insight_list(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not update.message:
         return
 
-    repo = get_insight_repo(context)
-    rows = await repo.list_all()
+    access = get_insight_access(context)
+    rows = await access.list_all()
 
     if not rows:
         await update.message.reply_html(t("insight_access.list_empty", "en"))

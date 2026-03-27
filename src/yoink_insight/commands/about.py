@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-from yoink_insight.bot.middleware import get_insight_config, get_insight_repo, get_owner_id
+from yoink_insight.bot.middleware import get_insight_access, get_insight_config, get_insight_repo, get_owner_id
 from yoink_insight.services.gemini import GeminiSummarizer, InsightError
 
 logger = logging.getLogger(__name__)
@@ -37,20 +37,17 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     user_id = update.effective_user.id
+    access = get_insight_access(context)
     repo = get_insight_repo(context)
-    owner_id = get_owner_id(context)
     config = get_insight_config(context)
 
-    if user_id != owner_id:
-        row = await repo.get(user_id)
-        if row is None:
-            lang = update.effective_user.language_code or "en"
-            await update.message.reply_html(t("insight.no_access", lang))
-            return
-        lang = row.lang
-    else:
-        row = await repo.get(user_id)
-        lang = row.lang if row else config.insight_default_lang
+    if not await access.is_allowed(user_id):
+        lang = update.effective_user.language_code or "en"
+        await update.message.reply_html(t("insight.no_access", lang))
+        return
+
+    row = await repo.get(user_id)
+    lang = row.lang if row else config.insight_default_lang
 
     args = context.args or []
     url: str | None = None
