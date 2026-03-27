@@ -37,6 +37,7 @@ def _is_youtube_url(url: str) -> bool:
     feature="summary",
     scopes=["all"],
     silent_deny=False,
+    group_silent_deny=True,
 ))
 async def _cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
