@@ -17,7 +17,15 @@ insight:
   no_url: "Укажите ссылку на YouTube видео."
   not_youtube: "Поддерживаются только ссылки YouTube."
   no_access: "У вас нет доступа к этой функции."
-  error: "Не удалось получить ответ от Gemini: {error}"
+  error:
+    generic: "Не удалось получить ответ. Попробуйте позже."
+    api_error: "Ошибка Gemini API. Попробуйте позже."
+    empty_response: "Gemini вернул пустой ответ. Попробуйте позже."
+    not_youtube: "Поддерживаются только ссылки YouTube."
+    transcripts_disabled: "У этого видео отключены субтитры."
+    no_transcript: "Для этого видео нет транскрипта."
+    transcript_error: "Не удалось получить транскрипт видео."
+    gemini_not_configured: "Gemini API ключ не настроен."
   about_header: "📺 <b>О видео</b>"
   summary_header: "📋 <b>Краткое содержание</b>"
 

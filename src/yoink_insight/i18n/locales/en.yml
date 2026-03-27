@@ -17,7 +17,15 @@ insight:
   no_url: "Please provide a YouTube URL."
   not_youtube: "Only YouTube URLs are supported."
   no_access: "You don't have access to this feature."
-  error: "Failed to get response from Gemini: {error}"
+  error:
+    generic: "Failed to get a response. Please try again later."
+    api_error: "Gemini API error. Please try again later."
+    empty_response: "Gemini returned an empty response. Please try again."
+    not_youtube: "Only YouTube URLs are supported."
+    transcripts_disabled: "This video has transcripts disabled."
+    no_transcript: "No transcript available for this video."
+    transcript_error: "Failed to fetch the video transcript."
+    gemini_not_configured: "Gemini API key is not configured."
   about_header: "📺 <b>About this video</b>"
   summary_header: "📋 <b>Summary</b>"
 
