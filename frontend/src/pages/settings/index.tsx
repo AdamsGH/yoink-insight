@@ -102,11 +102,11 @@ export default function InsightSettingsPage() {
             <p className="mt-0.5 text-xs text-muted-foreground">{t('insight.settings_lang_hint')}</p>
           </div>
           {data?.has_access ? (
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="space-y-1.5 flex-1 max-w-xs">
+            <div className="space-y-3">
+              <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">{t('insight.settings_lang_label')}</Label>
                 <Select value={lang} onValueChange={setLang}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -120,7 +120,7 @@ export default function InsightSettingsPage() {
                 onClick={save}
                 disabled={saving || !dirty}
                 size="sm"
-                className="w-full sm:w-auto"
+                className="w-full"
               >
                 {saving ? t('common.saving') : t('common.save')}
               </Button>
