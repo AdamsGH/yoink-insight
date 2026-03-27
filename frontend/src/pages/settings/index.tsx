@@ -63,9 +63,7 @@ export default function InsightSettingsPage() {
   const dirty = data !== null && lang !== data.lang
 
   return (
-    <div className="space-y-4 p-4">
-      <h1 className="text-xl font-semibold">{t('insight.settings_title')}</h1>
-
+    <div className="space-y-4">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{t('insight.settings_lang_title')}</CardTitle>
