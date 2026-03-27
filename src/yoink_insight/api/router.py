@@ -13,6 +13,7 @@ from yoink.core.api.deps import get_current_user, get_db
 from yoink.core.api.exceptions import NotFoundError
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
+from yoink_insight.config import InsightConfig
 from yoink_insight.api.schemas import (
     InsightAccessGrant,
     InsightAccessResponse,
@@ -83,11 +84,38 @@ async def revoke_insight_access(
     await session.commit()
 
 
+def _is_owner(user: User) -> bool:
+    return user.role == UserRole.owner
+
+
+async def _get_or_create_owner_row(
+    session: AsyncSession, user: User
+) -> InsightAccess:
+    """Auto-create an insight_access row for owner if one doesn't exist yet."""
+    row = await session.get(InsightAccess, user.id)
+    if row is None:
+        config = InsightConfig()
+        row = InsightAccess(
+            user_id=user.id,
+            lang=config.insight_default_lang,
+            granted_by=user.id,
+            granted_at=datetime.now(timezone.utc),
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+    return row
+
+
 @router.get("/settings/me", response_model=InsightAccessResponse)
 async def get_my_insight_settings(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InsightAccessResponse:
+    if _is_owner(current_user):
+        row = await _get_or_create_owner_row(session, current_user)
+        return InsightAccessResponse.model_validate(row)
+
     row = await session.get(InsightAccess, current_user.id)
     if row is None:
         raise HTTPException(status_code=404, detail="You do not have Insight access.")
@@ -100,9 +128,13 @@ async def update_my_insight_settings(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InsightAccessResponse:
-    row = await session.get(InsightAccess, current_user.id)
-    if row is None:
-        raise HTTPException(status_code=403, detail="You do not have Insight access.")
+    if _is_owner(current_user):
+        row = await _get_or_create_owner_row(session, current_user)
+    else:
+        row = await session.get(InsightAccess, current_user.id)
+        if row is None:
+            raise HTTPException(status_code=403, detail="You do not have Insight access.")
+
     row.lang = body.lang
     await session.commit()
     await session.refresh(row)
