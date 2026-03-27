@@ -24,12 +24,28 @@ _CTRL_RE = re.compile(r"[\r\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _strip_terminal(text: str) -> str:
-    """Remove ANSI escape sequences and stray control characters."""
+    """Remove ANSI escape sequences, control chars, and gemini CLI noise lines.
+
+    Filters out:
+    - ANSI color/cursor sequences
+    - Carriage returns and non-printable control characters
+    - "Loaded cached credentials." banner
+    - "Attempt N failed..." retry messages
+    - Node.js stack trace lines (start with "at " or "at async ")
+    """
     text = _ANSI_RE.sub("", text)
     text = _CTRL_RE.sub("", text)
-    # Remove gemini's "Loaded cached credentials." banner lines
-    lines = [l for l in text.splitlines() if not l.startswith("Loaded cached")]
-    return "\n".join(lines).strip()
+    result_lines = []
+    for line in text.splitlines():
+        if line.startswith("Loaded cached"):
+            continue
+        if line.startswith("Attempt ") and "failed with status" in line:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("at ") or stripped.startswith("at async "):
+            continue
+        result_lines.append(line)
+    return "\n".join(result_lines).strip()
 
 
 class GeminiError(Exception):
