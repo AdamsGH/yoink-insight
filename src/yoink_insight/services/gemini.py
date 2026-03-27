@@ -1,118 +1,115 @@
-"""GeminiRunner - async subprocess wrapper for the Gemini CLI.
-
-gemini CLI requires a pseudo-TTY to run in non-interactive mode.
-We use `script -q -e -c "..."` which allocates a PTY internally,
-allowing the CLI to detect a terminal and produce output.
-The raw output is then stripped of ANSI escape sequences.
-"""
+"""GeminiSummarizer - summarize YouTube videos via transcript + Gemini API."""
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import re
-import shlex
+from urllib.parse import parse_qs, urlparse
+
+from google import genai
+from youtube_transcript_api import (
+    NoTranscriptFound,
+    TranscriptsDisabled,
+    YouTubeTranscriptApi,
+)
 
 from yoink_insight.config import InsightConfig
 
 logger = logging.getLogger(__name__)
 
-# Matches ANSI escape sequences and common terminal control codes
-_ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-# Matches carriage returns and other control chars except newline/tab
-_CTRL_RE = re.compile(r"[\r\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+SUMMARY_PROMPT = """\
+Below is the transcript of a YouTube video. Summarize its key points as a \
+concise bullet list (10 bullets max). Reply in {lang}. Do not include any \
+preamble - output the bullet list directly.
+
+Transcript:
+{transcript}
+"""
 
 
-def _strip_terminal(text: str) -> str:
-    """Remove ANSI escape sequences, control chars, and gemini CLI noise lines.
+class InsightError(Exception):
+    """Raised when summarization fails."""
 
-    Filters out:
-    - ANSI color/cursor sequences
-    - Carriage returns and non-printable control characters
-    - "Loaded cached credentials." banner
-    - "Attempt N failed..." retry messages
-    - Node.js stack trace lines (start with "at " or "at async ")
+
+def _extract_video_id(url: str) -> str | None:
+    """Parse a YouTube URL and return the video ID, or None if not recognized."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if "youtu.be" in host:
+        vid = parsed.path.lstrip("/").split("/")[0]
+        return vid or None
+    if "youtube.com" in host:
+        qs = parse_qs(parsed.query)
+        if "v" in qs:
+            return qs["v"][0]
+        # Handles /shorts/<id> and /embed/<id>
+        m = re.match(r"/(?:shorts|embed|v)/([A-Za-z0-9_-]+)", parsed.path)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _fetch_transcript(video_id: str, lang_csv: str) -> str:
+    """Fetch transcript text for a video, trying languages in order.
+
+    Raises InsightError if no transcript is available.
     """
-    text = _ANSI_RE.sub("", text)
-    text = _CTRL_RE.sub("", text)
-    result_lines = []
-    for line in text.splitlines():
-        if line.startswith("Loaded cached"):
-            continue
-        if line.startswith("Attempt ") and "failed with status" in line:
-            continue
-        stripped = line.strip()
-        if stripped.startswith("at ") or stripped.startswith("at async "):
-            continue
-        result_lines.append(line)
-    return "\n".join(result_lines).strip()
+    langs = [l.strip() for l in lang_csv.split(",") if l.strip()]
+    api = YouTubeTranscriptApi()
+    try:
+        # Try preferred languages first, then fall back to any available
+        transcript_list = api.list(video_id)
+        try:
+            transcript = transcript_list.find_transcript(langs)
+        except NoTranscriptFound:
+            # Accept any language - Gemini will translate via prompt
+            transcript = transcript_list.find_transcript(
+                [t.language_code for t in transcript_list]
+            )
+        fetched = transcript.fetch()
+        return " ".join(snip.text for snip in fetched)
+    except TranscriptsDisabled:
+        raise InsightError("transcripts_disabled")
+    except NoTranscriptFound:
+        raise InsightError("no_transcript")
+    except Exception as exc:
+        logger.warning("Transcript fetch failed for %s: %s", video_id, exc)
+        raise InsightError("transcript_error") from exc
 
 
-class GeminiError(Exception):
-    """Raised when the Gemini CLI exits non-zero or times out."""
-
-
-class GeminiRunner:
-    """Runs the Gemini CLI via script(1) to provide a pseudo-TTY."""
+class GeminiSummarizer:
+    """Fetches a YouTube transcript and summarizes it with the Gemini API."""
 
     def __init__(self, config: InsightConfig) -> None:
-        self._config = config
+        if not config.gemini_api_key:
+            raise InsightError("gemini_not_configured")
+        self._client = genai.Client(api_key=config.gemini_api_key)
+        self._model = config.gemini_model
+        self._lang_csv = config.insight_transcript_langs
 
-    async def run(self, prompt: str) -> str:
-        """Execute gemini CLI with the given prompt and return clean text output.
+    async def summarize(self, url: str, lang: str) -> str:
+        """Return a bullet-list summary of the YouTube video at url.
 
-        Uses `script -q -e -c <cmd> /dev/null` to allocate a PTY so the CLI
-        detects a terminal and produces output in non-interactive mode.
-
-        Raises:
-            GeminiError: if the process exits non-zero or times out.
+        Raises InsightError on any failure.
         """
-        env = os.environ.copy()
-        if self._config.gemini_home:
-            env["HOME"] = self._config.gemini_home
+        video_id = _extract_video_id(url)
+        if not video_id:
+            raise InsightError("not_youtube")
 
-        # Build the inner gemini command, safely quoted
-        inner = (
-            f"{shlex.quote(self._config.gemini_cli_path)}"
-            f" --output-format text"
-            f" -p {shlex.quote(prompt)}"
-        )
-        # script -q  : quiet (no start/done headers)
-        # script -e  : exit with child exit code
-        # script -c  : run command string via shell
-        # /dev/null  : discard typescript file
-        cmd = ["script", "-q", "-e", "-c", inner, "/dev/null"]
+        transcript = _fetch_transcript(video_id, self._lang_csv)
+
+        prompt = SUMMARY_PROMPT.format(transcript=transcript, lang=lang)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env,
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
             )
-        except FileNotFoundError as exc:
-            raise GeminiError("'script' utility not found in PATH") from exc
+            text = response.text
+        except Exception as exc:
+            logger.error("Gemini API error: %s", exc)
+            raise InsightError("api_error") from exc
 
-        try:
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self._config.insight_timeout,
-            )
-        except asyncio.TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
-            raise GeminiError(
-                f"Gemini CLI timed out after {self._config.insight_timeout}s"
-            ) from exc
+        if not text or not text.strip():
+            raise InsightError("empty_response")
 
-        raw = stdout.decode(errors="replace")
-        text = _strip_terminal(raw)
-
-        if proc.returncode != 0:
-            logger.warning("Gemini CLI exited %d: %s", proc.returncode, text[:200])
-            raise GeminiError(text or f"exit code {proc.returncode}")
-
-        if not text:
-            raise GeminiError("Gemini CLI returned empty output")
-
-        return text
+        return text.strip()
