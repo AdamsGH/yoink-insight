@@ -96,7 +96,7 @@ class GeminiSummarizer:
         self._lang_csv = config.insight_transcript_langs
 
     async def _run(self, prompt: str) -> str:
-        """Send prompt to Gemini API and return the text response."""
+        """Send prompt to Gemini and return complete text response."""
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model,
@@ -106,7 +106,6 @@ class GeminiSummarizer:
             logger.error("Gemini API error: %s", exc)
             raise InsightError("api_error") from exc
 
-        # Check for prompt-level blocks (safety, prohibited content, etc.)
         if response.prompt_feedback and response.prompt_feedback.block_reason:
             reason = str(response.prompt_feedback.block_reason.value).lower()
             logger.warning("Gemini blocked prompt: %s", reason)
@@ -120,26 +119,56 @@ class GeminiSummarizer:
 
         return text.strip()
 
-    async def summarize(self, url: str, lang: str) -> str:
-        """Return a bullet-list summary of the YouTube video at url.
+    async def stream(self, prompt: str):
+        """Yield text chunks from Gemini as they arrive.
 
-        Raises InsightError on any failure.
+        Each yielded value is a str chunk (may be empty string for keep-alive).
+        Raises InsightError on API-level failure.
+        """
+        try:
+            async for chunk in await self._client.aio.models.generate_content_stream(
+                model=self._model,
+                contents=prompt,
+            ):
+                if chunk.text:
+                    yield chunk.text
+        except Exception as exc:
+            logger.error("Gemini stream error: %s", exc)
+            raise InsightError("api_error") from exc
+
+    def _make_prompt(self, command: str, transcript: str, lang: str) -> str:
+        if command == "summary":
+            return SUMMARY_PROMPT.format(transcript=transcript, lang=lang)
+        return ABOUT_PROMPT.format(transcript=transcript, lang=lang)
+
+    async def summarize(self, url: str, lang: str) -> str:
+        """Return a bullet-list summary. Raises InsightError on failure."""
+        video_id = _extract_video_id(url)
+        if not video_id:
+            raise InsightError("not_youtube")
+        transcript = _fetch_transcript(video_id, self._lang_csv)
+        return await self._run(SUMMARY_PROMPT.format(transcript=transcript, lang=lang))
+
+    async def describe(self, url: str, lang: str) -> str:
+        """Return a 2-3 sentence description. Raises InsightError on failure."""
+        video_id = _extract_video_id(url)
+        if not video_id:
+            raise InsightError("not_youtube")
+        transcript = _fetch_transcript(video_id, self._lang_csv)
+        return await self._run(ABOUT_PROMPT.format(transcript=transcript, lang=lang))
+
+    async def stream_command(
+        self, url: str, lang: str, command: str
+    ):
+        """Yield text chunks for summary or describe command.
+
+        Fetches transcript once, then streams from Gemini.
+        Raises InsightError if video_id or transcript cannot be resolved.
         """
         video_id = _extract_video_id(url)
         if not video_id:
             raise InsightError("not_youtube")
-
         transcript = _fetch_transcript(video_id, self._lang_csv)
-
-        prompt = SUMMARY_PROMPT.format(transcript=transcript, lang=lang)
-        return await self._run(prompt)
-
-    async def describe(self, url: str, lang: str) -> str:
-        """Return a 2-3 sentence description of the YouTube video at url."""
-        video_id = _extract_video_id(url)
-        if not video_id:
-            raise InsightError("not_youtube")
-
-        transcript = _fetch_transcript(video_id, self._lang_csv)
-        prompt = ABOUT_PROMPT.format(transcript=transcript, lang=lang)
-        return await self._run(prompt)
+        prompt = self._make_prompt(command, transcript, lang)
+        async for chunk in self.stream(prompt):
+            yield chunk

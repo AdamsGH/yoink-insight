@@ -28,8 +28,8 @@ class InsightPlugin:
         return InsightConfig
 
     def get_models(self) -> list:
-        from yoink_insight.storage.models import InsightAccess, InsightUsageLog, InsightUserSettings
-        return [InsightAccess, InsightUserSettings, InsightUsageLog]
+        from yoink_insight.storage.models import InsightAccess, InsightSummaryCache, InsightUsageLog, InsightUserSettings
+        return [InsightAccess, InsightUserSettings, InsightUsageLog, InsightSummaryCache]
 
     def get_handlers(self) -> list:
         from yoink_insight.commands import get_handler_specs
@@ -178,7 +178,21 @@ class InsightPlugin:
         ]
 
     def get_jobs(self) -> list[JobSpec] | None:
-        return None
+        async def _evict_cache(context: object) -> None:
+            repo = None
+            if hasattr(context, "bot_data"):
+                repo = context.bot_data.get("insight_summary_cache")
+            if repo is not None:
+                evicted = await repo.evict_expired()
+                if evicted:
+                    import logging
+                    logging.getLogger(__name__).debug(
+                        "Evicted %d expired insight cache entries", evicted
+                    )
+
+        return [
+            JobSpec(callback=_evict_cache, interval=3600.0, first=120.0, name="insight_cache_evict"),
+        ]
 
     async def setup(self, ctx: PluginContext) -> None:
         """Populate bot_data with insight-specific services."""
@@ -192,11 +206,15 @@ class InsightPlugin:
         owner_id = ctx.config.owner_id
         access_service = InsightAccessService(repo, owner_id, ctx.session_factory)
 
+        from yoink_insight.storage.repos import InsightSummaryCacheRepo  # noqa: PLC0415
+        cache_repo = InsightSummaryCacheRepo(ctx.session_factory)
+
         ctx.bot_data["insight_config"] = config
         ctx.bot_data["insight_repo"] = repo
         ctx.bot_data["insight_settings_repo"] = settings_repo
         ctx.bot_data["insight_usage_repo"] = usage_repo
         ctx.bot_data["insight_access"] = access_service
+        ctx.bot_data["insight_summary_cache"] = cache_repo
 
         from yoink.core.activity import register_activity_provider  # noqa: PLC0415
         from yoink_insight.activity import insight_activity_provider  # noqa: PLC0415

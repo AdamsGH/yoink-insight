@@ -11,7 +11,8 @@ from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
 from yoink_insight.bot.middleware import get_insight_config, get_insight_settings_repo, get_insight_usage_repo
-from yoink_insight.services.gemini import GeminiSummarizer, InsightError, _extract_video_id
+from yoink_insight.commands._runner import run_insight_command
+from yoink_insight.services.gemini import GeminiSummarizer, InsightError
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,6 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = update.effective_user.id
     settings = get_insight_settings_repo(context)
     config = get_insight_config(context)
-
     lang = await settings.get_lang(user_id, default=config.insight_default_lang)
 
     args = context.args or []
@@ -61,20 +61,31 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     thinking_msg = await update.message.reply_html(t("insight.thinking", lang))
+
+    cache_repo = context.bot_data.get("insight_summary_cache")
     usage_repo = get_insight_usage_repo(context)
-    video_id = _extract_video_id(url)
 
     try:
         summarizer = GeminiSummarizer(config)
-        result = await summarizer.describe(url, lang)
-        header = t("insight.about_header", lang)
-        await thinking_msg.edit_text(f"{header}\n\n{result}", parse_mode="HTML")
-        await usage_repo.log(user_id, "about", video_id=video_id, lang=lang, status="ok")
     except InsightError as exc:
         key = f"insight.error.{exc.args[0]}" if exc.args else "insight.error.generic"
-        err_text = t(key, lang, fallback=t("insight.error.generic", lang))
-        await thinking_msg.edit_text(err_text, parse_mode="HTML")
-        await usage_repo.log(user_id, "about", video_id=video_id, lang=lang, status="error", error_code=exc.args[0] if exc.args else "generic")
+        await thinking_msg.edit_text(
+            t(key, lang, fallback=t("insight.error.generic", lang)),
+            parse_mode="HTML",
+        )
+        return
+
+    await run_insight_command(
+        command="about",
+        url=url,
+        lang=lang,
+        thinking_msg=thinking_msg,
+        header=t("insight.about_header", lang),
+        summarizer=summarizer,
+        cache_repo=cache_repo,
+        usage_repo=usage_repo,
+        user_id=user_id,
+    )
 
 
 def register(app: Application) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from yoink.core.db.base import Base, _now
@@ -43,6 +43,24 @@ class InsightAccess(Base):
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )
+
+
+class InsightSummaryCache(Base):
+    """Cached Gemini summary/description results keyed by (video_id, lang, command).
+
+    TTL is 24 hours. Avoids duplicate Gemini API calls for the same video.
+    """
+    __tablename__ = "insight_summary_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    lang: Mapped[str] = mapped_column(String(8), nullable=False)
+    command: Mapped[str] = mapped_column(String(16), nullable=False)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class InsightUsageLog(Base):

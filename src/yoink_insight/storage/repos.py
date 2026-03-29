@@ -1,13 +1,72 @@
 """Insight plugin repositories."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import User
-from yoink_insight.storage.models import InsightAccess, InsightUsageLog, InsightUserSettings
+from yoink_insight.storage.models import InsightAccess, InsightSummaryCache, InsightUsageLog, InsightUserSettings
+
+_CACHE_TTL_HOURS = 24
+
+
+class InsightSummaryCacheRepo:
+    """Read/write Gemini summary results cached by (video_id, lang, command)."""
+
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def get(self, video_id: str, lang: str, command: str) -> str | None:
+        """Return cached result if it exists and has not expired."""
+        now = datetime.now(timezone.utc)
+        async with self._sf() as s:
+            result = await s.execute(
+                select(InsightSummaryCache.result)
+                .where(
+                    InsightSummaryCache.video_id == video_id,
+                    InsightSummaryCache.lang == lang,
+                    InsightSummaryCache.command == command,
+                    InsightSummaryCache.expires_at > now,
+                )
+            )
+            row = result.scalar_one_or_none()
+            return row
+
+    async def set(self, video_id: str, lang: str, command: str, result: str) -> None:
+        """Upsert a cached result with a fresh TTL."""
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=_CACHE_TTL_HOURS)
+        async with self._sf() as s:
+            stmt = (
+                pg_insert(InsightSummaryCache)
+                .values(
+                    video_id=video_id,
+                    lang=lang,
+                    command=command,
+                    result=result,
+                    created_at=now,
+                    expires_at=expires_at,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_insight_cache_key",
+                    set_={"result": result, "created_at": now, "expires_at": expires_at},
+                )
+            )
+            await s.execute(stmt)
+            await s.commit()
+
+    async def evict_expired(self) -> int:
+        """Delete all expired cache entries. Called by cleanup job."""
+        now = datetime.now(timezone.utc)
+        async with self._sf() as s:
+            result = await s.execute(
+                delete(InsightSummaryCache).where(InsightSummaryCache.expires_at <= now)
+            )
+            await s.commit()
+            return result.rowcount
 
 
 class InsightUserSettingsRepo:
