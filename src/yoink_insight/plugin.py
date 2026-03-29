@@ -197,3 +197,7 @@ class InsightPlugin:
         ctx.bot_data["insight_settings_repo"] = settings_repo
         ctx.bot_data["insight_usage_repo"] = usage_repo
         ctx.bot_data["insight_access"] = access_service
+
+        from yoink.core.activity import register_activity_provider  # noqa: PLC0415
+        from yoink_insight.activity import insight_activity_provider  # noqa: PLC0415
+        register_activity_provider("insight", insight_activity_provider)

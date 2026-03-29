@@ -1,19 +1,12 @@
 """Insight plugin ORM models."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from yoink.core.db.base import Base
-
-# Alias used by plugin model discovery
-InsightBase = Base
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+from yoink.core.db.base import Base, _now
 
 
 class InsightUserSettings(Base):
