@@ -2,25 +2,10 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BrainCircuit, LockKeyhole } from 'lucide-react'
 
-import { apiClient } from '@core/lib/api-client'
+import { insightApi, type InsightSettings } from '@insight/api/insight'
 import { formatDate } from '@core/lib/utils'
-import { Button } from '@core/components/ui/button'
-import { Card, CardContent } from '@core/components/ui/card'
-import { Label } from '@core/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@core/components/ui/select'
+import { Button, Card, CardContent, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
 import { toast } from '@core/components/ui/toast'
-
-interface InsightSettings {
-  lang: string
-  has_access: boolean
-  granted_at?: string | null
-}
 
 const LANG_OPTIONS = [
   { value: 'en', label: 'English' },
@@ -35,8 +20,8 @@ export default function InsightSettingsPage() {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    apiClient
-      .get<InsightSettings>('/insight/settings/me')
+    insightApi
+      .getSettings()
       .then((res) => {
         setData(res.data)
         setLang(res.data.lang)
@@ -48,7 +33,7 @@ export default function InsightSettingsPage() {
   const save = async () => {
     setSaving(true)
     try {
-      const res = await apiClient.patch<InsightSettings>('/insight/settings/me', { lang })
+      const res = await insightApi.patchSettings({ lang })
       setData(res.data)
       setLang(res.data.lang)
       toast.success(t('common.saved'))
