@@ -106,7 +106,7 @@ class InsightPlugin:
         import yaml
         from yoink.core.plugin import CommandSpec
 
-        _ROLE_RANK = {"user": 0, "moderator": 1, "admin": 2, "owner": 3}
+        from yoink.core.auth.rbac import ROLE_RANK as _ROLE_RANK  # noqa: PLC0415
         rank = _ROLE_RANK.get(role, 0)
 
         locales_dir = Path(__file__).parent / "i18n" / "locales"
