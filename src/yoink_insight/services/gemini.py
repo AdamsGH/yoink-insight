@@ -1,6 +1,7 @@
 """GeminiSummarizer - summarize YouTube videos via transcript + Gemini API."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from urllib.parse import parse_qs, urlparse
@@ -98,10 +99,16 @@ class GeminiSummarizer:
     async def _run(self, prompt: str) -> str:
         """Send prompt to Gemini and return complete text response."""
         try:
-            response = await self._client.aio.models.generate_content(
-                model=self._model,
-                contents=prompt,
+            response = await asyncio.wait_for(
+                self._client.aio.models.generate_content(
+                    model=self._model,
+                    contents=prompt,
+                ),
+                timeout=30.0,
             )
+        except asyncio.TimeoutError as exc:
+            logger.error("Gemini API timeout")
+            raise InsightError("api_error") from exc
         except Exception as exc:
             logger.error("Gemini API error: %s", exc)
             raise InsightError("api_error") from exc
@@ -146,7 +153,7 @@ class GeminiSummarizer:
         video_id = _extract_video_id(url)
         if not video_id:
             raise InsightError("not_youtube")
-        transcript = _fetch_transcript(video_id, self._lang_csv)
+        transcript = await asyncio.to_thread(_fetch_transcript, video_id, self._lang_csv)
         return await self._run(SUMMARY_PROMPT.format(transcript=transcript, lang=lang))
 
     async def describe(self, url: str, lang: str) -> str:
@@ -154,7 +161,7 @@ class GeminiSummarizer:
         video_id = _extract_video_id(url)
         if not video_id:
             raise InsightError("not_youtube")
-        transcript = _fetch_transcript(video_id, self._lang_csv)
+        transcript = await asyncio.to_thread(_fetch_transcript, video_id, self._lang_csv)
         return await self._run(ABOUT_PROMPT.format(transcript=transcript, lang=lang))
 
     async def stream_command(
@@ -168,7 +175,7 @@ class GeminiSummarizer:
         video_id = _extract_video_id(url)
         if not video_id:
             raise InsightError("not_youtube")
-        transcript = _fetch_transcript(video_id, self._lang_csv)
+        transcript = await asyncio.to_thread(_fetch_transcript, video_id, self._lang_csv)
         prompt = self._make_prompt(command, transcript, lang)
         async for chunk in self.stream(prompt):
             yield chunk
