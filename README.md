@@ -38,9 +38,10 @@ Access is managed via:
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `gemini_api_key` | yes | - | Gemini API key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| `gemini_model` | no | `gemini-3-flash-preview` | Model for summarization |
+| `gemini_model` | no | `gemini-2.0-flash` | Model for summarization |
 | `insight_default_lang` | no | `en` | Default language for new users |
 | `insight_transcript_langs` | no | `en,ru` | Transcript language preference order |
+| `insight_rate_limit_per_day` | no | `50` | Per-user daily Gemini call cap (enforced via insight_usage_log) |
 
 Free tier from AI Studio is sufficient for personal use (no billing required).
 
@@ -60,7 +61,11 @@ Mounted at `/api/v1/insight/`. Auth: JWT Bearer token.
 
 ## Database
 
-Migration `0009_insight_plugin_schema` adds `insight_access`. Migration `0013_insight_user_settings` adds `insight_user_settings`.
+- Migration `0009_insight_plugin_schema` adds `insight_access` (legacy; superseded by core `user_permissions` since `0012` - rows still readable but no longer dual-written).
+- Migration `0013_insight_user_settings` adds `insight_user_settings`.
+- Migration `0033_insight_summary_cache` adds `insight_summary_cache` (transcript-hash keyed; avoids re-billing Gemini for repeat URLs).
+
+Access checks read from core `user_permissions` table via `access.py` (single source). The legacy `insight_access` table remains for migration history; new grants/revokes only touch `user_permissions`.
 
 ```sql
 insight_access (
@@ -91,8 +96,10 @@ src/yoink_insight/
     access.py            # /insight_grant, /insight_revoke, /insight_list
     settings.py          # /insight_lang handler
   services/
-    gemini.py            # GeminiSummarizer: transcript fetch + Gemini API call
-    access.py            # InsightAccessService
+    gemini.py            # GeminiSummarizer: transcript fetch (asyncio.to_thread)
+                         #   + Gemini API call (httpx.Timeout(30) + tenacity retry)
+                         #   + per-user rate limit check via insight_usage_log
+    access.py            # AccessService - reads core user_permissions (no dual-write)
   storage/
     models.py            # InsightAccess, InsightUserSettings ORM models
     repos.py             # InsightAccessRepo, InsightUserSettingsRepo
