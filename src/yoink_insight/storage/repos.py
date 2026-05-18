@@ -205,6 +205,23 @@ class InsightUsageLogRepo:
             ))
             await s.commit()
 
+    async def count_today(self, user_id: int) -> int:
+        """Count successful Gemini calls for this user since UTC midnight.
+
+        Used by the rate-limit gate in run_insight_command. 'cached' status
+        rows are not counted (no API hit) - only status='ok'.
+        """
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        async with self._sf() as s:
+            result = await s.execute(
+                select(func.count()).select_from(InsightUsageLog).where(
+                    InsightUsageLog.user_id == user_id,
+                    InsightUsageLog.status == "ok",
+                    InsightUsageLog.created_at >= today_start,
+                )
+            )
+            return result.scalar() or 0
+
     async def stats_for_user(self, user_id: int) -> dict:
         """Return aggregate stats for a single user."""
         now = datetime.now(timezone.utc)

@@ -29,6 +29,7 @@ insight:
     no_transcript: "Для этого видео нет транскрипта."
     transcript_error: "Не удалось получить транскрипт видео."
     gemini_not_configured: "Gemini API ключ не настроен."
+    rate_limited: "Достигнут дневной лимит Insight ({limit} запросов в сутки). Кешированные ответы доступны; новые запросы - после полуночи UTC."
   about_header: "📺 <b>О видео</b>"
   summary_header: "📋 <b>Краткое содержание</b>"
 

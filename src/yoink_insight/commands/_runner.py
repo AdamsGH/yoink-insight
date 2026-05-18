@@ -31,6 +31,7 @@ async def run_insight_command(
     cache_repo: InsightSummaryCacheRepo,
     usage_repo: InsightUsageLogRepo,
     user_id: int,
+    rate_limit_per_day: int = 0,
 ) -> None:
     """Stream a Gemini response into thinking_msg via sendMessageDraft, then finalize.
 
@@ -42,12 +43,27 @@ async def run_insight_command(
     """
     video_id = _extract_video_id(url)
 
-    # Cache hit - instant response
+    # Cache hit - instant response (does not count against rate limit)
     cached = await cache_repo.get(video_id, lang, command) if video_id else None
     if cached:
         await thinking_msg.edit_text(f"{header}\n\n{cached}", parse_mode="HTML")
         await usage_repo.log(user_id, command, video_id=video_id, lang=lang, status="cached")
         return
+
+    # Rate-limit gate (only fresh API calls count; 0 disables)
+    if rate_limit_per_day > 0:
+        used_today = await usage_repo.count_today(user_id)
+        if used_today >= rate_limit_per_day:
+            await thinking_msg.edit_text(
+                t("insight.error.rate_limited", lang, limit=rate_limit_per_day,
+                  fallback=t("insight.error.generic", lang)),
+                parse_mode="HTML",
+            )
+            await usage_repo.log(
+                user_id, command, video_id=video_id, lang=lang,
+                status="error", error_code="rate_limited",
+            )
+            return
 
     bot = thinking_msg.get_bot()
     chat_id = thinking_msg.chat_id

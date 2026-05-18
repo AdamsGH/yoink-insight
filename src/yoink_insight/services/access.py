@@ -1,7 +1,11 @@
 """InsightAccessService - access check via unified user_permissions table.
 
-InsightAccess (insight_access table) is kept as a legacy fallback during
-transition. New grants go to user_permissions only.
+The insight_access table is kept ONLY for the legacy /access REST endpoints
+and /access bot command (both still return the old shape). New writes go to
+user_permissions; reads check user_permissions only - all pre-0012 rows were
+backfilled by migration 0012_user_permissions and the legacy fallback is no
+longer required. revoke() still cleans both tables to keep the legacy view
+in sync until those callers move off it.
 """
 from __future__ import annotations
 
@@ -43,7 +47,6 @@ class InsightAccessService:
 
         now = datetime.now(timezone.utc)
         async with self._sf() as s:
-            # Primary: unified permissions table
             perm = await s.execute(
                 select(UserPermission.id).where(
                     UserPermission.user_id == user_id,
@@ -53,12 +56,7 @@ class InsightAccessService:
                     | (UserPermission.expires_at > now),
                 )
             )
-            if perm.scalar_one_or_none() is not None:
-                return True
-
-            # Legacy fallback
-            legacy = await s.get(InsightAccess, user_id)
-            return legacy is not None
+            return perm.scalar_one_or_none() is not None
 
     async def grant(
         self,
@@ -66,7 +64,7 @@ class InsightAccessService:
         granted_by: int,
         lang: str = "en",
     ) -> UserPermission:
-        """Grant insight/summary in user_permissions. Also upserts legacy insight_access."""
+        """Grant insight/summary in user_permissions."""
         now = datetime.now(timezone.utc)
         async with self._sf() as s:
             user = await s.get(User, user_id)

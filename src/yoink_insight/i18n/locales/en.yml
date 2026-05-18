@@ -29,6 +29,7 @@ insight:
     no_transcript: "No transcript available for this video."
     transcript_error: "Failed to fetch the video transcript."
     gemini_not_configured: "Gemini API key is not configured."
+    rate_limited: "Daily Insight quota reached ({limit} calls/day). Cached lookups still work; try again after UTC midnight."
   about_header: "📺 <b>About this video</b>"
   summary_header: "📋 <b>Summary</b>"
 

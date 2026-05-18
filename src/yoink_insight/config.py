@@ -22,3 +22,7 @@ class InsightConfig(BaseSettings):
 
     # Transcript languages to try, in order (comma-separated)
     insight_transcript_langs: str = "en,ru"
+
+    # Max successful Gemini calls per user per UTC day. 0 disables the gate.
+    # Cached responses do not count against this limit; only fresh API hits do.
+    insight_rate_limit_per_day: int = 50

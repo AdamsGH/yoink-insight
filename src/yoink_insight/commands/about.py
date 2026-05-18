@@ -85,6 +85,7 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         cache_repo=cache_repo,
         usage_repo=usage_repo,
         user_id=user_id,
+        rate_limit_per_day=config.insight_rate_limit_per_day,
     )
 
 
