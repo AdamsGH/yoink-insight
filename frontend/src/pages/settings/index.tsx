@@ -349,15 +349,11 @@ export default function InsightSettingsPage() {
           </CardHeader>
           <CardContent className="px-4 pb-2">
             <div className="divide-y divide-border">
-              <div className="py-2">
-                <p className="text-xs text-muted-foreground">
-                  {data?.has_access
-                    ? (data.granted_at
-                        ? t('insight.settings_access_granted', { date: formatDate(data.granted_at) })
-                        : t('insight.settings_access_active', { defaultValue: 'Access active' }))
-                    : t('insight.settings_no_access_body')}
-                </p>
-              </div>
+              {!data?.has_access && (
+                <div className="py-2">
+                  <p className="text-xs text-muted-foreground">{t('insight.settings_no_access_body')}</p>
+                </div>
+              )}
               {data?.has_access && (
                 <div className="flex items-center justify-between gap-3 py-2">
                   <div className="min-w-0 flex-1">
@@ -391,14 +387,12 @@ export default function InsightSettingsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-2">
-            <div className="divide-y divide-border">
-              <div className="py-2">
-                <p className="text-xs text-muted-foreground">
-                  {data?.has_tldr_access
-                    ? t('insight.tldr_access_active', { defaultValue: 'Access active - summarise any URL with /tldr' })
-                    : t('insight.tldr_no_access', { defaultValue: 'No TL;DR access. Ask an admin.' })}
-                </p>
-              </div>
+            <div className="space-y-0">
+              {!data?.has_tldr_access && (
+                <div className="py-2">
+                  <p className="text-xs text-muted-foreground">{t('insight.tldr_no_access', { defaultValue: 'No TL;DR access. Ask an admin.' })}</p>
+                </div>
+              )}
 
               {data?.has_tldr_access && (
                 <div className="py-2 space-y-1.5">
@@ -490,8 +484,8 @@ export default function InsightSettingsPage() {
           <Card>
             <CardHeader className="px-4 py-3">
               <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-sm font-medium">
-                  {t('insight.aliases_title', { defaultValue: '/tldr aliases' })}
+                <CardTitle className="text-base font-medium text-muted-foreground">
+                  {t('insight.aliases_hint', { defaultValue: 'Use /tldr <url> <alias> to apply.' })}
                 </CardTitle>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -502,9 +496,6 @@ export default function InsightSettingsPage() {
                   <TooltipContent>{t('insight.alias_add_title', { defaultValue: 'Add alias' })}</TooltipContent>
                 </Tooltip>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('insight.aliases_hint', { defaultValue: 'Use /tldr <url> <alias> to apply.' })}
-              </p>
             </CardHeader>
             <CardContent className="p-0 pb-2">
               <div className="divide-y divide-border">
