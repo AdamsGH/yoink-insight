@@ -121,7 +121,7 @@ export default function TldrConfigPage() {
   }
 
   const dirty = config !== null && (
-    JSON.stringify(allowed) !== JSON.stringify(config.allowed_models) ||
+    JSON.stringify([...allowed].sort()) !== JSON.stringify([...config.allowed_models].sort()) ||
     defaultModel !== config.default_model ||
     gatewayUrl !== config.gateway_base_url ||
     gatewayKey !== config.gateway_api_key
@@ -269,9 +269,11 @@ export default function TldrConfigPage() {
         </CardContent>
       </Card>
 
-      <Button onClick={save} disabled={saving || !dirty} size="sm" className="w-full">
-        {saving ? t('common.saving') : t('common.save')}
-      </Button>
+      {dirty && (
+        <Button onClick={save} disabled={saving} size="sm" className="w-full">
+          {saving ? t('common.saving') : t('common.save')}
+        </Button>
+      )}
     </div>
   )
 }
