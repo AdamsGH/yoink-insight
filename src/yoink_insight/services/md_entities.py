@@ -171,6 +171,7 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
     leading = _utf16_len(raw) - _utf16_len(stripped)
     # Also collapse triple+ newlines
     result = re.sub(r"\n{3,}", "\n\n", stripped).rstrip()
+    result = result.replace("\u2014", "-").replace("\u2013", "-")
 
     if leading > 0:
         entities = [
