@@ -332,172 +332,138 @@ export default function InsightSettingsPage() {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="space-y-3">
-        {/* AI Summary access */}
+        {/* AI access + Language */}
         <Card>
-          <CardContent className="pt-4 pb-4">
-            {data?.has_access ? (
-              <div className="flex items-center gap-3">
-                <BrainCircuit className="h-5 w-5 shrink-0 text-primary" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium leading-none">
-                    {t('insight.settings_access_active', { defaultValue: 'Access active' })}
-                  </p>
-                  {data.granted_at && (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t('insight.settings_access_granted', { date: formatDate(data.granted_at) })}
-                    </p>
-                  )}
-                </div>
+          <CardHeader className="px-4 py-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              {data?.has_access
+                ? <BrainCircuit className="h-4 w-4 shrink-0 text-primary" />
+                : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
+              {data?.has_access
+                ? t('insight.settings_access_active', { defaultValue: 'AI Summary' })
+                : t('insight.settings_no_access_title')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-2">
+            <div className="divide-y divide-border">
+              <div className="py-2">
+                <p className="text-xs text-muted-foreground">
+                  {data?.has_access && data.granted_at
+                    ? t('insight.settings_access_granted', { date: formatDate(data.granted_at) })
+                    : t('insight.settings_no_access_body')}
+                </p>
               </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium leading-none">{t('insight.settings_no_access_title')}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{t('insight.settings_no_access_body')}</p>
+              {data?.has_access && (
+                <div className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm leading-snug">{t('insight.settings_lang_label')}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground leading-snug">{t('insight.settings_lang_hint')}</p>
+                  </div>
+                  <Select value={lang ?? data?.lang ?? 'en'} onValueChange={setLang}>
+                    <SelectTrigger className="h-8 text-xs w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LANG_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value} className="text-xs">{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Language */}
-        <Card>
-          <CardContent className="pt-4 space-y-4">
-            <div>
-              <p className="text-sm font-medium">{t('insight.settings_lang_title')}</p>
-              <p className="mt-0.5 text-xs text-muted-foreground">{t('insight.settings_lang_hint')}</p>
+              )}
             </div>
-            {data?.has_access ? (
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">{t('insight.settings_lang_label')}</Label>
-                <Select value={lang ?? data?.lang ?? 'en'} onValueChange={setLang}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {LANG_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">{t('insight.settings_no_access_body')}</p>
-            )}
           </CardContent>
         </Card>
 
         {/* TL;DR */}
         <Card>
-          <CardContent className="pt-4 pb-4 space-y-4">
-            <div className="flex items-center gap-3">
-              {data?.has_tldr_access ? (
-                <Link className="h-5 w-5 shrink-0 text-primary" />
-              ) : (
-                <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" />
-              )}
-              <div className="min-w-0">
-                <p className="text-sm font-medium leading-none">
-                  {t('insight.tldr_title', { defaultValue: 'TL;DR' })}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
+          <CardHeader className="px-4 py-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              {data?.has_tldr_access
+                ? <Link className="h-4 w-4 shrink-0 text-primary" />
+                : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
+              {t('insight.tldr_title', { defaultValue: 'TL;DR' })}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-2">
+            <div className="divide-y divide-border">
+              <div className="py-2">
+                <p className="text-xs text-muted-foreground">
                   {data?.has_tldr_access
                     ? t('insight.tldr_access_active', { defaultValue: 'Access active - summarise any URL with /tldr' })
                     : t('insight.tldr_no_access', { defaultValue: 'No TL;DR access. Ask an admin.' })}
                 </p>
               </div>
-            </div>
 
-            {data?.has_tldr_access && (
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs text-muted-foreground">
-                    {t('insight.tldr_model_label', { defaultValue: 'LLM model' })}
-                  </Label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 w-6 p-0"
-                    disabled={loadingModels}
-                    onClick={loadModels}
-                  >
-                    <RefreshCw className={`h-3.5 w-3.5 ${loadingModels ? 'animate-spin' : ''}`} />
-                  </Button>
-                </div>
-                <Combobox<string>
-                  items={modelList}
-                  itemToStringLabel={(m: string) => m}
-                  itemToStringValue={(m: string) => m}
-                >
-                  <ComboboxInput
-                    value={tldrModel ?? data?.tldr_model ?? data?.tldr_allowed_models[0] ?? ''}
-                    placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select model...' })}
-                    className="font-mono text-xs"
-                  />
-                  <ComboboxContent>
-                    <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>
-                    <ComboboxList>
-                      {(item) => (
-                        <ComboboxItem
-                          key={item}
-                          value={item}
-                          onSelect={() => setTldrModel(item)}
-                          className="font-mono text-xs"
-                        >
-                          {item}
-                        </ComboboxItem>
-                      )}
-                    </ComboboxList>
-                  </ComboboxContent>
-                </Combobox>
-              </div>
-            )}
-
-            {data?.has_tldr_access && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-muted-foreground">
-                    {t('insight.github_token_label', { defaultValue: 'GitHub token (optional)' })}
-                  </Label>
-                  {data.github_token_set && githubToken === '' && (
-                    <span className="text-xs text-green-500 font-medium">&#x2713; saved</span>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    placeholder={data.github_token_set && githubToken === ''
-                      ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace' })
-                      : 'ghp_...'
-                    }
-                    value={githubToken === '__clear__' ? '' : githubToken}
-                    onChange={(e) => setGithubToken(e.target.value)}
-                    className="font-mono text-xs flex-1"
-                  />
-                  {data.github_token_set && githubToken === '' && (
+              {data?.has_tldr_access && (
+                <div className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm leading-snug">{t('insight.tldr_model_label', { defaultValue: 'LLM model' })}</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-9 shrink-0"
-                      onClick={() => setGithubToken('__clear__')}
+                      type="button" variant="ghost" size="sm" className="h-7 w-7 p-0"
+                      disabled={loadingModels} onClick={loadModels}
                     >
-                      {t('common.clear', { defaultValue: 'Clear' })}
+                      <RefreshCw className={`h-3.5 w-3.5 ${loadingModels ? 'animate-spin' : ''}`} />
                     </Button>
-                  )}
+                    <Combobox<string>
+                      items={modelList}
+                      itemToStringLabel={(m: string) => m}
+                      itemToStringValue={(m: string) => m}
+                    >
+                      <ComboboxInput
+                        value={tldrModel ?? data?.tldr_model ?? data?.tldr_allowed_models[0] ?? ''}
+                        placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select...' })}
+                        className="h-8 text-xs font-mono w-44"
+                      />
+                      <ComboboxContent>
+                        <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>
+                        <ComboboxList>
+                          {(item) => (
+                            <ComboboxItem key={item} value={item} onSelect={() => setTldrModel(item)} className="font-mono text-xs">
+                              {item}
+                            </ComboboxItem>
+                          )}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
+                  </div>
                 </div>
-                {githubToken === '__clear__' && (
-                  <p className="text-xs text-destructive">
-                    {t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}
-                  </p>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  {t('insight.github_token_hint', { defaultValue: 'For private repos and to avoid GitHub rate limits.' })}
-                </p>
-              </div>
-            )}
+              )}
+
+              {data?.has_tldr_access && (
+                <div className="py-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm leading-snug">{t('insight.github_token_label', { defaultValue: 'GitHub token' })}</p>
+                    {data.github_token_set && githubToken === '' && (
+                      <span className="text-xs text-green-500 font-medium">&#x2713; saved</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      type="password"
+                      placeholder={data.github_token_set && githubToken === ''
+                        ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace' })
+                        : 'ghp_...'}
+                      value={githubToken === '__clear__' ? '' : githubToken}
+                      onChange={(e) => setGithubToken(e.target.value)}
+                      className="h-8 font-mono text-xs flex-1"
+                    />
+                    {data.github_token_set && githubToken === '' && (
+                      <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0"
+                        onClick={() => setGithubToken('__clear__')}>
+                        {t('common.clear', { defaultValue: 'Clear' })}
+                      </Button>
+                    )}
+                  </div>
+                  {githubToken === '__clear__' && (
+                    <p className="text-xs text-destructive">{t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">{t('insight.github_token_hint', { defaultValue: 'For private repos and to avoid GitHub rate limits.' })}</p>
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
 
@@ -557,7 +523,7 @@ export default function InsightSettingsPage() {
                       <div className="flex gap-1 shrink-0 pt-0.5">
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditAlias(a); setAliasDialogOpen(true) }}>
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setEditAlias(a); setAliasDialogOpen(true) }}>
                               <Pencil className="h-3.5 w-3.5" />
                             </Button>
                           </TooltipTrigger>
@@ -567,8 +533,8 @@ export default function InsightSettingsPage() {
                           <TooltipTrigger asChild>
                             <Button
                               variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
                               disabled={deletingId === a.id}
                               onClick={() => handleDeleteAlias(a)}
                             >
