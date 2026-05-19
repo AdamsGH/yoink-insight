@@ -106,6 +106,28 @@ class InsightUserSettingsRepo:
             await s.refresh(row)
             return row
 
+    async def get_github_token(self, user_id: int) -> str | None:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            return row.github_token if row is not None else None
+
+    async def set_github_token(self, user_id: int, token: str | None) -> InsightUserSettings:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            if row is None:
+                user = await s.get(User, user_id)
+                if user is None:
+                    user = User(id=user_id)
+                    s.add(user)
+                    await s.flush()
+                row = InsightUserSettings(user_id=user_id, github_token=token)
+                s.add(row)
+            else:
+                row.github_token = token
+            await s.commit()
+            await s.refresh(row)
+            return row
+
     async def set_lang(self, user_id: int, lang: str) -> InsightUserSettings:
         async with self._sf() as s:
             row = await s.get(InsightUserSettings, user_id)

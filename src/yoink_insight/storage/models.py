@@ -24,6 +24,7 @@ class InsightUserSettings(Base):
     )
     lang: Mapped[str] = mapped_column(String(8), default="en", nullable=False)
     tldr_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    github_token: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
 
 class InsightAccess(Base):

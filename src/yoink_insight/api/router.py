@@ -288,6 +288,7 @@ async def get_my_insight_settings(
     settings_row = await session.get(InsightUserSettings, current_user.id)
     lang = settings_row.lang if settings_row else config.insight_default_lang
     tldr_model = settings_row.tldr_model if settings_row else None
+    github_token = settings_row.github_token if settings_row else None
     allowed = await _get_tldr_allowed_models_from_db(session, config)
     return InsightUserSettingsResponse(
         lang=lang,
@@ -295,6 +296,7 @@ async def get_my_insight_settings(
         has_tldr_access=has_tldr,
         tldr_model=tldr_model,
         tldr_allowed_models=allowed if has_tldr else [],
+        github_token_set=bool(github_token),
     )
 
 
@@ -324,12 +326,15 @@ async def update_my_insight_settings(
             user_id=current_user.id,
             lang=body.lang,
             tldr_model=tldr_model,
+            github_token=body.github_token,
         )
         session.add(settings_row)
     else:
         settings_row.lang = body.lang
         if tldr_model is not None or body.tldr_model is not None:
             settings_row.tldr_model = tldr_model
+        if body.github_token is not None:
+            settings_row.github_token = body.github_token or None
     await session.commit()
     await session.refresh(settings_row)
     allowed = await _get_tldr_allowed_models_from_db(session, config)
@@ -339,6 +344,7 @@ async def update_my_insight_settings(
         has_tldr_access=has_tldr,
         tldr_model=settings_row.tldr_model,
         tldr_allowed_models=allowed if has_tldr else [],
+        github_token_set=bool(settings_row.github_token),
     )
 
 

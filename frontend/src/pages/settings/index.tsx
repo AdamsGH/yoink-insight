@@ -4,7 +4,7 @@ import { BrainCircuit, Link, LockKeyhole } from 'lucide-react'
 
 import { insightApi, type InsightSettings } from '@insight/api/insight'
 import { formatDate } from '@core/lib/utils'
-import { Button, Card, CardContent, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
+import { Button, Card, CardContent, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
 import { toast } from '@core/components/ui/toast'
 
 const LANG_OPTIONS = [
@@ -17,6 +17,7 @@ export default function InsightSettingsPage() {
   const [data, setData] = useState<InsightSettings | null>(null)
   const [lang, setLang] = useState('en')
   const [tldrModel, setTldrModel] = useState<string>('')
+  const [githubToken, setGithubToken] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -27,6 +28,7 @@ export default function InsightSettingsPage() {
         setData(res.data)
         setLang(res.data.lang)
         setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
+        setGithubToken('')
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -35,14 +37,16 @@ export default function InsightSettingsPage() {
   const save = async () => {
     setSaving(true)
     try {
-      const body: { lang?: string; tldr_model?: string | null } = { lang }
+      const body: { lang?: string; tldr_model?: string | null; github_token?: string | null } = { lang }
       if (data?.has_tldr_access) {
         body.tldr_model = tldrModel || null
+        if (githubToken !== '') body.github_token = githubToken || null
       }
       const res = await insightApi.patchSettings(body)
       setData(res.data)
       setLang(res.data.lang)
       setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
+      setGithubToken('')
       toast.success(t('common.saved'))
     } catch {
       toast.error(t('common.load_error'))
@@ -57,7 +61,8 @@ export default function InsightSettingsPage() {
 
   const langDirty = data !== null && lang !== data.lang
   const tldrDirty = data !== null && data.has_tldr_access && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
-  const dirty = langDirty || tldrDirty
+  const githubDirty = data !== null && data.has_tldr_access && githubToken !== ''
+  const dirty = langDirty || tldrDirty || githubDirty
 
   return (
     <div className="space-y-3">
@@ -153,6 +158,27 @@ export default function InsightSettingsPage() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+
+          {data?.has_tldr_access && (
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                {t('insight.github_token_label', { defaultValue: 'GitHub token (optional)' })}
+              </Label>
+              <Input
+                type="password"
+                placeholder={data.github_token_set
+                  ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace saved one' })
+                  : t('insight.github_token_placeholder_empty', { defaultValue: 'ghp_...' })
+                }
+                value={githubToken}
+                onChange={(e) => setGithubToken(e.target.value)}
+                className="font-mono text-xs"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t('insight.github_token_hint', { defaultValue: 'For private repos and to avoid GitHub rate limits.' })}
+              </p>
             </div>
           )}
         </CardContent>

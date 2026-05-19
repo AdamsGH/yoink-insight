@@ -1,6 +1,7 @@
 import { apiClient } from '@core/lib/api-client'
 
 export interface InsightSettings {
+  github_token_set: boolean
   lang: string
   has_access: boolean
   has_tldr_access: boolean
@@ -25,7 +26,7 @@ export const insightApi = {
   getSettings: () =>
     apiClient.get<InsightSettings>('/insight/settings/me'),
 
-  patchSettings: (body: { lang?: string; tldr_model?: string | null }) =>
+  patchSettings: (body: { lang?: string; tldr_model?: string | null; github_token?: string | null }) =>
     apiClient.patch<InsightSettings>('/insight/settings/me', body),
 
   getTldrConfig: () =>

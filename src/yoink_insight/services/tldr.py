@@ -7,14 +7,13 @@ Supports:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from urllib.parse import urlparse
 
 import httpx
-import trafilatura
 
 from yoink_insight.config import InsightConfig
+from yoink_insight.services.fetch import FetchResult, _FetchError, fetch_web_content
 
 logger = logging.getLogger(__name__)
 
@@ -85,38 +84,6 @@ async def _fetch_youtube_transcript(url: str, config: InsightConfig) -> str:
     raise TldrError("transcript_error")
 
 
-async def _fetch_web_content(url: str, max_chars: int) -> str:
-    """Fetch a web page and extract main text via trafilatura."""
-    async with httpx.AsyncClient(
-        timeout=30.0,
-        follow_redirects=True,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; yoink-insight/1.0)"},
-    ) as client:
-        try:
-            resp = await client.get(url)
-        except httpx.RequestError as exc:
-            logger.warning("Web fetch failed for %s: %s", url, exc)
-            raise TldrError("fetch_error") from exc
-
-    if resp.status_code >= 400:
-        raise TldrError("fetch_error")
-
-    html = resp.text
-    text = await asyncio.to_thread(
-        trafilatura.extract,
-        html,
-        include_comments=False,
-        include_tables=True,
-        no_fallback=False,
-    )
-    if not text or not text.strip():
-        raise TldrError("no_content")
-
-    if len(text) > max_chars:
-        text = text[:max_chars] + "\n\n[Content truncated]"
-
-    return text
-
 
 def _build_prompt(
     content: str,
@@ -145,6 +112,7 @@ async def stream_tldr(
     config: InsightConfig,
     question: str | None = None,
     model: str | None = None,
+    github_token: str | None = None,
 ):
     """Fetch content and stream LLM summary chunks.
 
@@ -156,10 +124,21 @@ async def stream_tldr(
         content = await _fetch_youtube_transcript(url, config)
         source_desc = f"YouTube video ({url})"
     else:
-        content = await _fetch_web_content(url, config.tldr_max_content_chars)
-        # Strip query/fragment for display
+        try:
+            result: FetchResult = await fetch_web_content(
+                url,
+                config.tldr_max_content_chars,
+                github_token=github_token or getattr(config, "github_token", None),
+            )
+        except _FetchError as exc:
+            raise TldrError(exc.args[0] if exc.args else "no_content") from exc
+        except Exception as exc:
+            logger.warning("fetch_web_content failed for %s: %s", url, exc)
+            raise TldrError("fetch_error") from exc
+        content = result.content
         parsed = urlparse(url)
         source_desc = parsed.netloc + parsed.path
+        logger.debug("Fetched %s via %s (%d chars)", url, result.via, len(content))
 
     prompt = _build_prompt(content, source_desc, lang, question)
 

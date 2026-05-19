@@ -63,8 +63,9 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     thinking_msg = await update.message.reply_html(t("insight.thinking", lang))
 
-    # Per-user model override
+    # Per-user model and github token
     user_model = await settings.get_tldr_model(user_id)
+    user_github_token = await settings.get_github_token(user_id)
 
     # Cache lookup
     cache_repo = context.bot_data.get("insight_summary_cache")
@@ -86,7 +87,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     last_sent_len = 0
 
     try:
-        async for chunk in stream_tldr(url, lang, config, question=question, model=user_model):
+        async for chunk in stream_tldr(url, lang, config, question=question, model=user_model, github_token=user_github_token):
             accumulated += chunk
             if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:
                 try:

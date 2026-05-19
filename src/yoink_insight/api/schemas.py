@@ -27,6 +27,7 @@ class InsightAccessGrant(BaseModel):
 class InsightSettingsUpdate(BaseModel):
     lang: str
     tldr_model: str | None = None
+    github_token: str | None = None
 
 
 class InsightUserSettingsResponse(BaseModel):
@@ -35,6 +36,7 @@ class InsightUserSettingsResponse(BaseModel):
     has_tldr_access: bool = False
     tldr_model: str | None = None
     tldr_allowed_models: list[str] = []
+    github_token_set: bool = False
 
 
 class TldrConfigResponse(BaseModel):

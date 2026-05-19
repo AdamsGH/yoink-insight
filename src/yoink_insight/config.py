@@ -42,3 +42,4 @@ class InsightConfig(BaseSettings):
 
     # Max successful /tldr calls per user per UTC day. 0 disables.
     tldr_rate_limit_per_day: int = 20
+    github_token: str | None = None
