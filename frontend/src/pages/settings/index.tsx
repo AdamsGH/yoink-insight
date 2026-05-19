@@ -23,6 +23,11 @@ const LANG_OPTIONS = [
 
 const BUILTIN_ALIASES = ['max', 'nobullshit', 'noshit']
 
+const BUILTIN_ALIAS_DEFS = [
+  { aliases: ['max'], desc: 'Thorough breakdown: all key points, technical details, bold headings.' },
+  { aliases: ['nobullshit', 'noshit'], desc: 'Cynical critic: one-line verdict, max 7 concrete bullets, calls out hype.' },
+]
+
 // ---- Tag input ----
 
 function TagInput({
@@ -498,18 +503,33 @@ export default function InsightSettingsPage() {
                 </Tooltip>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                {t('insight.aliases_hint', { defaultValue: 'Use /tldr <url> <alias> to apply. Built-in: max, nobullshit.' })}
+                {t('insight.aliases_hint', { defaultValue: 'Use /tldr <url> <alias> to apply.' })}
               </p>
             </CardHeader>
             <CardContent className="p-0 pb-2">
+              <div className="divide-y divide-border">
+                {BUILTIN_ALIAS_DEFS.map((def) => (
+                  <div key={def.aliases[0]} className="flex items-start gap-3 px-4 py-2.5">
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div className="flex flex-wrap gap-1">
+                        {def.aliases.map(tag => (
+                          <Badge key={tag} variant="outline" className="font-mono text-xs px-1.5 py-0 text-muted-foreground">{tag}</Badge>
+                        ))}
+                        <span className="text-[10px] text-muted-foreground/50 self-center">built-in</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground line-clamp-2">{def.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
               {loadingAliases ? (
-                <div className="px-4 py-3 text-xs text-muted-foreground">{t('common.loading')}</div>
+                <div className="px-4 py-3 text-xs text-muted-foreground border-t border-border">{t('common.loading')}</div>
               ) : aliases.length === 0 ? (
-                <div className="px-4 py-4 text-center text-xs text-muted-foreground">
+                <div className="px-4 py-3 text-center text-xs text-muted-foreground border-t border-border">
                   {t('insight.aliases_empty', { defaultValue: 'No custom aliases yet.' })}
                 </div>
               ) : (
-                <div className="divide-y divide-border">
+                <div className="divide-y divide-border border-t border-border">
                   {aliases.map((a) => (
                     <div key={a.id} className="flex items-start gap-3 px-4 py-3">
                       <div className="flex-1 min-w-0 space-y-0.5">
