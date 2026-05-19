@@ -340,12 +340,19 @@ export default function InsightSettingsPage() {
         {/* AI access + Language */}
         <Card>
           <CardHeader className="px-4 py-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              {data?.has_access
-                ? <BrainCircuit className="h-4 w-4 shrink-0 text-primary" />
-                : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
-              {t('insight.settings_access_active', { defaultValue: 'AI Summary' })}
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                {data?.has_access
+                  ? <BrainCircuit className="h-4 w-4 shrink-0 text-primary" />
+                  : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                {t('insight.settings_access_active', { defaultValue: 'AI Summary' })}
+              </CardTitle>
+              <span className={`text-xs font-medium ${data?.has_access ? 'text-primary' : 'text-muted-foreground'}`}>
+                {data?.has_access
+                  ? t('insight.access_active_short', { defaultValue: 'active' })
+                  : t('insight.access_no_short', { defaultValue: 'no access' })}
+              </span>
+            </div>
           </CardHeader>
           <CardContent className="px-4 pb-2">
             <div className="divide-y divide-border">
@@ -379,20 +386,22 @@ export default function InsightSettingsPage() {
         {/* TL;DR */}
         <Card>
           <CardHeader className="px-4 py-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              {data?.has_tldr_access
-                ? <Link className="h-4 w-4 shrink-0 text-primary" />
-                : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
-              {t('insight.tldr_title', { defaultValue: 'TL;DR' })}
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                {data?.has_tldr_access
+                  ? <Link className="h-4 w-4 shrink-0 text-primary" />
+                  : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                {t('insight.tldr_title', { defaultValue: 'TL;DR' })}
+              </CardTitle>
+              <span className={`text-xs font-medium ${data?.has_tldr_access ? 'text-primary' : 'text-muted-foreground'}`}>
+                {data?.has_tldr_access
+                  ? t('insight.tldr_access_active', { defaultValue: 'active' })
+                  : t('insight.tldr_no_access_short', { defaultValue: 'no access' })}
+              </span>
+            </div>
           </CardHeader>
           <CardContent className="px-4 pb-2">
             <div className="space-y-0">
-              {!data?.has_tldr_access && (
-                <div className="py-2">
-                  <p className="text-xs text-muted-foreground">{t('insight.tldr_no_access', { defaultValue: 'No TL;DR access. Ask an admin.' })}</p>
-                </div>
-              )}
 
               {data?.has_tldr_access && (
                 <div className="py-2 space-y-1.5">
