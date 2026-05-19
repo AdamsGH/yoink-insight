@@ -3,7 +3,7 @@ import { apiClient } from '@core/lib/api-client'
 export interface InsightSettings {
   github_token_set: boolean
   lang: string
-  has_access: boolean
+  has_gemini_access: boolean
   has_tldr_access: boolean
   tldr_model: string | null
   tldr_allowed_models: string[]

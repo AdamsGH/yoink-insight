@@ -285,7 +285,7 @@ async def get_my_insight_settings(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InsightUserSettingsResponse:
-    has_access = await _has_insight_access(session, current_user)
+    has_gemini_access = await _has_insight_access(session, current_user)
     has_tldr = await _has_feature_access(session, current_user, "tldr")
     config = InsightConfig()
     settings_row = await session.get(InsightUserSettings, current_user.id)
@@ -295,7 +295,7 @@ async def get_my_insight_settings(
     allowed = await _get_tldr_allowed_models_from_db(session, config)
     return InsightUserSettingsResponse(
         lang=lang,
-        has_access=has_access,
+        has_gemini_access=has_gemini_access,
         has_tldr_access=has_tldr,
         tldr_model=tldr_model,
         tldr_allowed_models=allowed if has_tldr else [],
@@ -309,9 +309,9 @@ async def update_my_insight_settings(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InsightUserSettingsResponse:
-    has_access = await _has_insight_access(session, current_user)
+    has_gemini_access = await _has_insight_access(session, current_user)
     has_tldr = await _has_feature_access(session, current_user, "tldr")
-    if not has_access and not has_tldr:
+    if not has_gemini_access and not has_tldr:
         raise HTTPException(status_code=403, detail="You do not have Insight access.")
 
     config = InsightConfig()
@@ -343,7 +343,7 @@ async def update_my_insight_settings(
     allowed = await _get_tldr_allowed_models_from_db(session, config)
     return InsightUserSettingsResponse(
         lang=settings_row.lang,
-        has_access=has_access,
+        has_gemini_access=has_gemini_access,
         has_tldr_access=has_tldr,
         tldr_model=settings_row.tldr_model,
         tldr_allowed_models=allowed if has_tldr else [],

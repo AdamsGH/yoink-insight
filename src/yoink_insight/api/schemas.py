@@ -32,7 +32,7 @@ class InsightSettingsUpdate(BaseModel):
 
 class InsightUserSettingsResponse(BaseModel):
     lang: str
-    has_access: bool
+    has_gemini_access: bool
     has_tldr_access: bool = False
     tldr_model: str | None = None
     tldr_allowed_models: list[str] = []
