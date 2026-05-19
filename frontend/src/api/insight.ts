@@ -24,7 +24,7 @@ export interface GatewayModel {
 
 export interface TldrAlias {
   id: number
-  alias: string
+  aliases: string
   prompt: string
   created_at: string
 }
@@ -58,11 +58,11 @@ export const insightApi = {
   listAliases: () =>
     apiClient.get<TldrAlias[]>('/insight/aliases'),
 
-  createAlias: (alias: string, prompt: string) =>
-    apiClient.post<TldrAlias>('/insight/aliases', { alias, prompt }),
+  createAlias: (aliases: string, prompt: string) =>
+    apiClient.post<TldrAlias>('/insight/aliases', { aliases, prompt }),
 
-  updateAlias: (id: number, alias: string, prompt: string) =>
-    apiClient.patch<TldrAlias>(`/insight/aliases/${id}`, { alias, prompt }),
+  updateAlias: (id: number, aliases: string, prompt: string) =>
+    apiClient.patch<TldrAlias>(`/insight/aliases/${id}`, { aliases, prompt }),
 
   deleteAlias: (id: number) =>
     apiClient.delete(`/insight/aliases/${id}`),

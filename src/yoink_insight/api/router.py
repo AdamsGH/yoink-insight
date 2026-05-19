@@ -528,6 +528,23 @@ async def list_my_aliases(
     return list(rows)
 
 
+_BUILTIN_ALIAS_NAMES = {"max", "nobullshit", "noshit"}
+
+
+def _validate_aliases(raw: str) -> list[str]:
+    """Parse, normalise, and validate a comma-separated alias string."""
+    from yoink_insight.services.tldr import parse_aliases
+    keys = parse_aliases(raw)
+    if not keys:
+        raise HTTPException(status_code=400, detail="aliases must not be empty.")
+    for k in keys:
+        if not k.replace("-", "").replace("_", "").isalnum():
+            raise HTTPException(status_code=400, detail=f"'{k}' contains invalid characters.")
+        if k in _BUILTIN_ALIAS_NAMES:
+            raise HTTPException(status_code=400, detail=f"'{k}' is a built-in alias and cannot be overridden.")
+    return keys
+
+
 @router.post("/aliases", response_model=TldrAliasResponse, status_code=201, summary="Create /tldr alias")
 async def create_alias(
     body: TldrAliasCreate,
@@ -536,26 +553,22 @@ async def create_alias(
 ) -> TldrAliasResponse:
     if not await _has_feature_access(session, current_user, "tldr"):
         raise HTTPException(status_code=403, detail="No TLDR access.")
-    alias = body.alias.strip().lower()
-    if not alias:
-        raise HTTPException(status_code=400, detail="alias must not be empty.")
-    if alias in ("max", "nobullshit", "noshit"):
-        raise HTTPException(status_code=400, detail=f"'{alias}' is a built-in alias and cannot be overridden.")
-    count = (await session.execute(
+    keys = _validate_aliases(body.aliases)
+    existing_rows = (await session.execute(
         select(InsightTldrAlias).where(InsightTldrAlias.user_id == current_user.id)
     )).scalars().all()
-    if len(count) >= _MAX_ALIASES_PER_USER:
+    if len(existing_rows) >= _MAX_ALIASES_PER_USER:
         raise HTTPException(status_code=400, detail=f"Maximum {_MAX_ALIASES_PER_USER} aliases per user.")
-    # Check duplicate
-    existing = (await session.execute(
-        select(InsightTldrAlias).where(
-            InsightTldrAlias.user_id == current_user.id,
-            InsightTldrAlias.alias == alias,
-        )
-    )).scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=409, detail=f"Alias '{alias}' already exists.")
-    row = InsightTldrAlias(user_id=current_user.id, alias=alias, prompt=body.prompt.strip())
+    # Check that none of the new keys collide with existing ones
+    existing_keys: set[str] = set()
+    for r in existing_rows:
+        from yoink_insight.services.tldr import parse_aliases
+        existing_keys.update(parse_aliases(r.aliases))
+    conflicts = set(keys) & existing_keys
+    if conflicts:
+        raise HTTPException(status_code=409, detail=f"Already exists: {', '.join(sorted(conflicts))}.")
+    normalized = ", ".join(keys)
+    row = InsightTldrAlias(user_id=current_user.id, aliases=normalized, prompt=body.prompt.strip())
     session.add(row)
     await session.commit()
     await session.refresh(row)
@@ -572,10 +585,22 @@ async def update_alias(
     row = await session.get(InsightTldrAlias, alias_id)
     if row is None or row.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Alias not found.")
-    alias = body.alias.strip().lower()
-    if alias in ("max", "nobullshit", "noshit"):
-        raise HTTPException(status_code=400, detail=f"'{alias}' is a built-in alias.")
-    row.alias = alias
+    keys = _validate_aliases(body.aliases)
+    # Check conflicts with OTHER rows
+    other_rows = (await session.execute(
+        select(InsightTldrAlias).where(
+            InsightTldrAlias.user_id == current_user.id,
+            InsightTldrAlias.id != alias_id,
+        )
+    )).scalars().all()
+    from yoink_insight.services.tldr import parse_aliases
+    other_keys: set[str] = set()
+    for r in other_rows:
+        other_keys.update(parse_aliases(r.aliases))
+    conflicts = set(keys) & other_keys
+    if conflicts:
+        raise HTTPException(status_code=409, detail=f"Already used in another alias: {', '.join(sorted(conflicts))}.")
+    row.aliases = ", ".join(keys)
     row.prompt = body.prompt.strip()
     await session.commit()
     await session.refresh(row)

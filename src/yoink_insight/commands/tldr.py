@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from yoink_insight.bot.middleware import get_effective_insight_config, get_insight_settings_repo, get_insight_usage_repo
 from yoink_insight.services.md_entities import _utf16_len, md_to_entities
-from yoink_insight.services.tldr import TldrError, _BUILTIN_ALIASES, alias_header_key, cache_key_for_url, stream_tldr
+from yoink_insight.services.tldr import TldrError, _BUILTIN_ALIASES, alias_header_key, cache_key_for_url, parse_aliases, stream_tldr
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,9 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             rows = (await session.execute(
                 select(InsightTldrAlias).where(InsightTldrAlias.user_id == user_id)
             )).scalars().all()
-            user_aliases = {r.alias: r.prompt for r in rows}
+            for r in rows:
+                for key in parse_aliases(r.aliases):
+                    user_aliases[key] = r.prompt
 
     # Determine if question is an alias (aliases don't bypass cache - they modify the default prompt)
     is_alias = question is not None and question.strip().lower() in {**_BUILTIN_ALIASES, **user_aliases}

@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useGetIdentity } from '@refinedev/core'
-import { BrainCircuit, Link, LockKeyhole, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { BrainCircuit, Link, LockKeyhole, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 
 import { insightApi, type InsightSettings, type TldrAlias } from '@insight/api/insight'
 import { formatDate } from '@core/lib/utils'
 import {
-  Button, Card, CardContent, CardHeader, CardTitle,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle,
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
   Input, Label,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -23,6 +23,84 @@ const LANG_OPTIONS = [
 
 const BUILTIN_ALIASES = ['max', 'nobullshit', 'noshit']
 
+// ---- Tag input ----
+
+function TagInput({
+  tags,
+  onChange,
+  placeholder,
+  autoFocus,
+}: {
+  tags: string[]
+  onChange: (tags: string[]) => void
+  placeholder?: string
+  autoFocus?: boolean
+}) {
+  const [input, setInput] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const commit = (raw: string) => {
+    const tag = raw.trim().toLowerCase()
+    if (tag && !tags.includes(tag)) onChange([...tags, tag])
+    setInput('')
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === ',' || e.key === 'Enter') {
+      e.preventDefault()
+      commit(input)
+    } else if (e.key === 'Backspace' && !input && tags.length > 0) {
+      onChange(tags.slice(0, -1))
+    }
+  }
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    if (val.endsWith(',')) {
+      commit(val.slice(0, -1))
+    } else {
+      setInput(val)
+    }
+  }
+
+  const remove = (tag: string) => {
+    onChange(tags.filter(t => t !== tag))
+    inputRef.current?.focus()
+  }
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-2.5 py-1.5 min-h-9 cursor-text focus-within:ring-1 focus-within:ring-ring"
+      onClick={() => inputRef.current?.focus()}
+    >
+      {tags.map(tag => (
+        <span
+          key={tag}
+          className="inline-flex items-center gap-1 rounded-full border border-transparent bg-secondary text-secondary-foreground px-2 py-0.5 text-xs font-mono font-semibold"
+        >
+          {tag}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); remove(tag) }}
+            className="text-secondary-foreground/60 hover:text-secondary-foreground transition-colors"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+      <input
+        ref={inputRef}
+        value={input}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        placeholder={tags.length === 0 ? placeholder : ''}
+        autoFocus={autoFocus}
+        className="flex-1 min-w-[80px] bg-transparent text-xs font-mono outline-none placeholder:text-muted-foreground"
+      />
+    </div>
+  )
+}
+
 // ---- Alias dialog ----
 
 function AliasDialog({
@@ -34,25 +112,28 @@ function AliasDialog({
   open: boolean
   initial?: TldrAlias
   onClose: () => void
-  onSubmit: (alias: string, prompt: string) => Promise<void>
+  onSubmit: (aliases: string, prompt: string) => Promise<void>
 }) {
   const { t } = useTranslation()
-  const [alias, setAlias] = useState(initial?.alias ?? '')
-  const [prompt, setPrompt] = useState(initial?.prompt ?? '')
+  const [tags, setTags] = useState<string[]>([])
+  const [prompt, setPrompt] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (open) { setAlias(initial?.alias ?? ''); setPrompt(initial?.prompt ?? '') }
+    if (open) {
+      setTags(initial?.aliases ? initial.aliases.split(',').map(s => s.trim()).filter(Boolean) : [])
+      setPrompt(initial?.prompt ?? '')
+    }
   }, [open, initial])
 
-  const isBuiltin = BUILTIN_ALIASES.includes(alias.trim().toLowerCase())
-  const canSave = alias.trim().length > 0 && prompt.trim().length > 0 && !isBuiltin && !saving
+  const builtinConflicts = tags.filter(t => BUILTIN_ALIASES.includes(t))
+  const canSave = tags.length > 0 && prompt.trim().length > 0 && builtinConflicts.length === 0 && !saving
 
   const handleSubmit = async () => {
     if (!canSave) return
     setSaving(true)
     try {
-      await onSubmit(alias.trim().toLowerCase(), prompt.trim())
+      await onSubmit(tags.join(', '), prompt.trim())
       onClose()
     } catch {
       // error handled by parent
@@ -73,20 +154,21 @@ function AliasDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <Label>{t('insight.alias_field', { defaultValue: 'Alias' })}</Label>
-            <Input
-              placeholder="e.g. deep, brief, tech"
-              value={alias}
-              onChange={(e) => setAlias(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+            <Label>{t('insight.alias_field', { defaultValue: 'Aliases' })}</Label>
+            <TagInput
+              tags={tags}
+              onChange={setTags}
+              placeholder="deep, brief, tech ..."
               autoFocus={!initial}
-              className="font-mono text-xs"
             />
-            {isBuiltin && (
+            {builtinConflicts.length > 0 && (
               <p className="text-xs text-destructive">
-                {t('insight.alias_builtin_conflict', { defaultValue: 'This is a built-in alias and cannot be overridden.' })}
+                {builtinConflicts.join(', ')} {t('insight.alias_builtin_conflict', { defaultValue: 'is a built-in alias and cannot be overridden.' })}
               </p>
             )}
+            <p className="text-xs text-muted-foreground">
+              {t('insight.alias_field_hint', { defaultValue: 'Type and press comma or Enter to add. Each word triggers the same prompt.' })}
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label>{t('insight.alias_prompt_field', { defaultValue: 'Prompt instruction' })}</Label>
@@ -198,9 +280,9 @@ export default function InsightSettingsPage() {
     }
   }
 
-  const handleCreateAlias = async (alias: string, prompt: string) => {
+  const handleCreateAlias = async (aliases: string, prompt: string) => {
     try {
-      await insightApi.createAlias(alias, prompt)
+      await insightApi.createAlias(aliases, prompt)
       toast.success(t('common.saved'))
       loadAliases()
     } catch (err: unknown) {
@@ -210,10 +292,10 @@ export default function InsightSettingsPage() {
     }
   }
 
-  const handleUpdateAlias = async (alias: string, prompt: string) => {
+  const handleUpdateAlias = async (aliases: string, prompt: string) => {
     if (!editAlias) return
     try {
-      await insightApi.updateAlias(editAlias.id, alias, prompt)
+      await insightApi.updateAlias(editAlias.id, aliases, prompt)
       toast.success(t('common.saved'))
       loadAliases()
     } catch (err: unknown) {
@@ -464,7 +546,11 @@ export default function InsightSettingsPage() {
                   {aliases.map((a) => (
                     <div key={a.id} className="flex items-start gap-3 px-4 py-3">
                       <div className="flex-1 min-w-0 space-y-0.5">
-                        <p className="font-mono text-sm font-medium">{a.alias}</p>
+                        <div className="flex flex-wrap gap-1">
+                          {a.aliases.split(',').map(s => s.trim()).filter(Boolean).map(tag => (
+                            <Badge key={tag} variant="secondary" className="font-mono text-xs px-1.5 py-0">{tag}</Badge>
+                          ))}
+                        </div>
                         <p className="text-xs text-muted-foreground line-clamp-2">{a.prompt}</p>
                         <p className="text-xs text-muted-foreground/60">{formatDate(a.created_at)}</p>
                       </div>

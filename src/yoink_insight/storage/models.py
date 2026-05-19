@@ -79,7 +79,7 @@ class InsightTldrAlias(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    alias: Mapped[str] = mapped_column(String(32), nullable=False)
+    aliases: Mapped[str] = mapped_column(String(256), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False

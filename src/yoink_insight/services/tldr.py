@@ -153,6 +153,11 @@ def _build_prompt(
     )
 
 
+def parse_aliases(raw: str) -> list[str]:
+    """Split comma-separated alias string, normalise each token."""
+    return [a.strip().lower() for a in raw.split(",") if a.strip()]
+
+
 def resolve_alias(
     question: str | None,
     user_aliases: dict[str, str] | None = None,

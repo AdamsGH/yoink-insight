@@ -63,16 +63,16 @@ class TldrAliasResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    alias: str
+    aliases: str
     prompt: str
     created_at: datetime
 
 
 class TldrAliasCreate(BaseModel):
-    alias: str
+    aliases: str
     prompt: str
 
 
 class TldrAliasUpdate(BaseModel):
-    alias: str
+    aliases: str
     prompt: str
