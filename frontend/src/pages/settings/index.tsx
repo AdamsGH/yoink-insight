@@ -446,12 +446,12 @@ export default function InsightSettingsPage() {
                         : 'ghp_...'}
                       value={githubToken === '__clear__' ? '' : githubToken}
                       onChange={(e) => setGithubToken(e.target.value)}
-                      className="h-8 font-mono text-xs pr-8"
+                      className="h-8 font-mono text-xs pr-9"
                     />
                     {data.github_token_set && githubToken === '' && (
                       <button
                         type="button"
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
                         onClick={() => setGithubToken('__clear__')}
                       >
                         <X className="h-3.5 w-3.5" />
@@ -461,7 +461,7 @@ export default function InsightSettingsPage() {
                   {githubToken === '__clear__' && (
                     <p className="text-xs text-destructive">{t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}</p>
                   )}
-                  <p className="text-xs text-muted-foreground">{t('insight.github_token_hint', { defaultValue: 'For private repos and to avoid GitHub rate limits.' })}</p>
+                  <p className="text-xs text-muted-foreground whitespace-nowrap">For private repos &amp; rate limits</p>
                 </div>
               )}
             </div>
