@@ -39,6 +39,7 @@ insight:
 
 tldr:
   header: "🔗 Summary"
+  header_nobullshit: "🔗 No BS"
   no_url: "Please provide a URL. Usage: /tldr <url> [question]"
   error:
     fetch_error: "Could not fetch the page. Check the URL and try again."

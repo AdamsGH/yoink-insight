@@ -31,7 +31,9 @@ Formatting rules (MUST follow):
 _TLDR_PROMPT = """\
 Below is content fetched from {source_desc}.
 {question_line}
-Provide a concise summary as a bullet list (max 12 bullets). Reply in {lang}.
+Summarise this content as a tight bullet list (max 12 bullets). Be direct and specific.
+Name the actual ideas, facts, or conclusions - not vague category labels.
+Skip any bullet that does not contain a concrete claim. Reply in {lang}.
 
 {format_rules}
 Content:
@@ -41,7 +43,7 @@ Content:
 _TLDR_QUESTION_PROMPT = """\
 Below is content fetched from {source_desc}.
 Answer the following question based on this content: {question}
-Be concise and factual. Reply in {lang}.
+Be direct and specific. Reply in {lang}.
 
 {format_rules}
 Content:
@@ -51,20 +53,34 @@ Content:
 # Built-in alias prompts
 _BUILTIN_ALIASES: dict[str, str] = {
     "max": (
-        "Give a comprehensive, detailed breakdown of this content. Cover all key points, "
-        "technical details, examples, and nuances. Do not omit anything significant. "
-        "Use sections and bullet lists as appropriate."
+        "Give a thorough, well-structured breakdown of this content. "
+        "Cover all significant points, technical details, examples, and nuances in depth. "
+        "Do not omit anything meaningful. Use sections with bold headings and bullet lists."
     ),
     "nobullshit": (
-        "Cut straight to the point. Is this content worth reading? What is the single core idea? "
-        "List only the genuinely useful facts - skip hype, filler, and obvious statements. "
-        "If it's mostly noise, say so directly."
+        "You are a cynical, no-nonsense critic. Be blunt and direct - do not soften your verdict. "
+        "Start with a one-line verdict: is this worth reading, or is it a waste of time? Be specific. "
+        "Then list ONLY the genuinely new or useful facts - maximum 7 bullets, each one a concrete claim. "
+        "If a bullet would not survive the question 'so what?' - cut it. "
+        "Call out hype, padding, and obvious statements explicitly if they dominate the content. "
+        "Do NOT summarise structure or intentions ('the author explains...') - summarise actual content. "
+        "Reply in {lang}."
     ),
     "noshit": (
-        "Cut straight to the point. Is this content worth reading? What is the single core idea? "
-        "List only the genuinely useful facts - skip hype, filler, and obvious statements. "
-        "If it's mostly noise, say so directly."
+        "You are a cynical, no-nonsense critic. Be blunt and direct - do not soften your verdict. "
+        "Start with a one-line verdict: is this worth reading, or is it a waste of time? Be specific. "
+        "Then list ONLY the genuinely new or useful facts - maximum 7 bullets, each one a concrete claim. "
+        "If a bullet would not survive the question 'so what?' - cut it. "
+        "Call out hype, padding, and obvious statements explicitly if they dominate the content. "
+        "Do NOT summarise structure or intentions ('the author explains...') - summarise actual content. "
+        "Reply in {lang}."
     ),
+}
+
+# i18n key suffix for the Telegram message header per alias
+_BUILTIN_ALIAS_HEADER_KEY: dict[str, str] = {
+    "nobullshit": "tldr.header_nobullshit",
+    "noshit": "tldr.header_nobullshit",
 }
 
 # Characters streamed before we send a draft update to Telegram
@@ -137,16 +153,29 @@ def _build_prompt(
     )
 
 
-def resolve_alias(question: str | None, user_aliases: dict[str, str] | None = None) -> str | None:
+def resolve_alias(
+    question: str | None,
+    user_aliases: dict[str, str] | None = None,
+    lang: str = "en",
+) -> str | None:
     """If question matches a built-in or user alias, return the expanded prompt."""
     if not question:
         return None
     key = question.strip().lower()
     if key in _BUILTIN_ALIASES:
-        return _BUILTIN_ALIASES[key]
+        prompt = _BUILTIN_ALIASES[key]
+        return prompt.format(lang=lang) if "{lang}" in prompt else prompt
     if user_aliases and key in user_aliases:
         return user_aliases[key]
     return question
+
+
+def alias_header_key(question: str | None, user_aliases: dict[str, str] | None = None) -> str:
+    """Return the i18n key to use as Telegram message header for this alias."""
+    if not question:
+        return "tldr.header"
+    key = question.strip().lower()
+    return _BUILTIN_ALIAS_HEADER_KEY.get(key, "tldr.header")
 
 
 async def stream_tldr(
@@ -184,7 +213,7 @@ async def stream_tldr(
         source_desc = parsed.netloc + parsed.path
         logger.debug("Fetched %s via %s (%d chars)", url, result.via, len(content))
 
-    resolved_question = resolve_alias(question, user_aliases)
+    resolved_question = resolve_alias(question, user_aliases, lang=lang)
     prompt = _build_prompt(content, source_desc, lang, resolved_question)
 
     endpoint = config.gateway_base_url.rstrip("/") + "/v1/chat/completions"

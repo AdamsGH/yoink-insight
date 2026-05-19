@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from yoink_insight.bot.middleware import get_effective_insight_config, get_insight_settings_repo, get_insight_usage_repo
 from yoink_insight.services.md_entities import _utf16_len, md_to_entities
-from yoink_insight.services.tldr import TldrError, _BUILTIN_ALIASES, cache_key_for_url, stream_tldr
+from yoink_insight.services.tldr import TldrError, _BUILTIN_ALIASES, alias_header_key, cache_key_for_url, stream_tldr
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +85,8 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ck = cache_key_for_url(url)
     cache_cmd = f"tldr:{question.strip().lower()}" if is_alias else "tldr"
     cached = await cache_repo.get(ck, lang, cache_cmd) if (cache_repo and (not question or is_alias)) else None
+    header = t(alias_header_key(question, user_aliases), lang)
     if cached:
-        header = t("tldr.header", lang)
         plain_body, body_entities = md_to_entities(cached)
         header_line = f"{header}\n\n"
         offset_shift = _utf16_len(header_line)
@@ -107,7 +107,6 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await usage_repo.log(user_id, "tldr", lang=lang, status="cached")
         return
 
-    header = t("tldr.header", lang)
     bot = thinking_msg.get_bot()
     chat_id = thinking_msg.chat_id
     thread_id = getattr(thinking_msg, "message_thread_id", None)
