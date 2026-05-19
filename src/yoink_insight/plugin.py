@@ -190,7 +190,7 @@ class InsightPlugin:
             FeatureSpec(
                 plugin="insight",
                 feature="tldr",
-                label="TLDR",
+                label="TL;DR",
                 description="Access to /tldr command (any URL summarised via gateway LLM)",
                 default_min_role=None,  # explicit grant required; owner always passes
             ),
