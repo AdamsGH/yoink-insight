@@ -3,6 +3,9 @@
 Pass the result as text= and entities= to sendMessage instead of parse_mode.
 No escaping required - plain text is transmitted as-is.
 
+Telegram entity offsets/lengths are in UTF-16 code units (surrogate pairs for
+characters outside BMP count as 2). All arithmetic here uses utf16_len().
+
 Supported:
   **bold** / __bold__
   *italic* / _italic_
@@ -14,17 +17,25 @@ Supported:
 """
 from __future__ import annotations
 
+import logging
 import re
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
+
+logging.getLogger("markdown_it").setLevel(logging.WARNING)
+
+
+def _utf16_len(s: str) -> int:
+    """Number of UTF-16 code units used by string s."""
+    return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
 
 
 def md_to_entities(text: str) -> tuple[str, list[dict]]:
     """Parse markdown, return (plain_text, entities).
 
     entities items are dicts: {type, offset, length} or {type, offset, length, url}.
-    Pass as telegram.MessageEntity(**item) or directly via Bot API json.
+    Offsets and lengths are in UTF-16 code units as required by Telegram Bot API.
     """
     md = MarkdownIt("commonmark")
     tokens = md.parse(text)
@@ -32,11 +43,19 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
     chars: list[str] = []
     entities: list[dict] = []
 
-    # Stack of open spans: (entity_type, start_offset, url)
-    stack: list[tuple[str, int, str]] = []
+    # Running UTF-16 offset counter
+    _utf16_pos = 0
 
     def pos() -> int:
-        return sum(len(c) for c in chars)
+        return _utf16_pos
+
+    # Stack of open spans: (entity_type, utf16_start, url)
+    stack: list[tuple[str, int, str]] = []
+
+    def append_text(s: str) -> None:
+        nonlocal _utf16_pos
+        chars.append(s)
+        _utf16_pos += _utf16_len(s)
 
     def open_span(etype: str, url: str = "") -> None:
         stack.append((etype, pos(), url))
@@ -53,38 +72,48 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
                     entities.append(ent)
                 return
 
+    _in_link = False
+
     def walk_inline(children: list[Token]) -> None:
+        nonlocal _in_link
         for tok in children:
             t = tok.type
             if t == "text":
-                chars.append(tok.content)
+                append_text(tok.content)
             elif t in ("softbreak", "hardbreak"):
-                chars.append("\n")
+                append_text("\n")
             elif t == "strong_open":
-                open_span("bold")
+                if not _in_link:
+                    open_span("bold")
             elif t == "strong_close":
-                close_span("bold")
+                if not _in_link:
+                    close_span("bold")
             elif t == "em_open":
-                open_span("italic")
+                if not _in_link:
+                    open_span("italic")
             elif t == "em_close":
-                close_span("italic")
+                if not _in_link:
+                    close_span("italic")
             elif t == "code_inline":
                 start = pos()
-                chars.append(tok.content)
-                entities.append({"type": "code", "offset": start, "length": len(tok.content)})
+                append_text(tok.content)
+                if not _in_link:
+                    entities.append({"type": "code", "offset": start, "length": pos() - start})
             elif t == "link_open":
                 href = dict(tok.attrs or {}).get("href", "")
                 open_span("text_link", href)
+                _in_link = True
             elif t == "link_close":
                 close_span("text_link")
+                _in_link = False
             elif t == "html_inline":
-                chars.append(re.sub(r"<[^>]+>", "", tok.content))
+                append_text(re.sub(r"<[^>]+>", "", tok.content))
             elif tok.children:
                 walk_inline(tok.children)
 
     def newline_if_needed() -> None:
-        if chars and chars[-1] != "\n":
-            chars.append("\n")
+        if chars and chars[-1][-1:] != "\n":
+            append_text("\n")
 
     _in_list_item = False
 
@@ -99,22 +128,22 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
                 newline_if_needed()
         elif t == "paragraph_close":
             if not _in_list_item:
-                chars.append("\n")
+                append_text("\n")
 
         elif t == "heading_open":
             newline_if_needed()
             open_span("bold")
         elif t == "heading_close":
             close_span("bold")
-            chars.append("\n")
+            append_text("\n")
 
         elif t == "list_item_open":
             newline_if_needed()
-            chars.append("\u2022 ")
+            append_text("\u2022 ")
             _in_list_item = True
         elif t == "list_item_close":
             _in_list_item = False
-            chars.append("\n")
+            append_text("\n\n")
 
         elif t in ("bullet_list_open", "ordered_list_open"):
             newline_if_needed()
@@ -125,24 +154,29 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
             newline_if_needed()
             start = pos()
             content = tok.content.rstrip("\n")
-            chars.append(content)
-            entities.append({"type": "pre", "offset": start, "length": len(content)})
+            append_text(content)
+            entities.append({"type": "pre", "offset": start, "length": pos() - start})
 
         elif t == "hr":
             newline_if_needed()
 
         elif t == "html_block":
-            chars.append(re.sub(r"<[^>]+>", "", tok.content))
+            append_text(re.sub(r"<[^>]+>", "", tok.content))
 
-    result = re.sub(r"\n{3,}", "\n\n", "".join(chars)).strip()
+    raw = "".join(chars)
 
-    # If leading whitespace was stripped, shift entity offsets
-    stripped_start = len("".join(chars)) - len("".join(chars).lstrip("\n"))
-    if stripped_start > 0:
+    # Collapse 3+ newlines to 2
+    # Need to recompute offsets after stripping leading newlines
+    stripped = raw.lstrip("\n")
+    leading = _utf16_len(raw) - _utf16_len(stripped)
+    # Also collapse triple+ newlines
+    result = re.sub(r"\n{3,}", "\n\n", stripped).rstrip()
+
+    if leading > 0:
         entities = [
-            {**e, "offset": e["offset"] - stripped_start}
+            {**e, "offset": e["offset"] - leading}
             for e in entities
-            if e["offset"] - stripped_start >= 0
+            if e["offset"] >= leading
         ]
 
     return result, entities

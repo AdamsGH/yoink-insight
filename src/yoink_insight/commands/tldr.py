@@ -122,10 +122,22 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             accumulated += chunk
             if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:
                 try:
+                    draft_plain, draft_entities = md_to_entities(accumulated.strip())
+                    draft_header_line = f"{header}\n\n"
+                    draft_offset = _utf16_len(draft_header_line)
+                    draft_full_text = draft_header_line + draft_plain
+                    draft_full_entities = [
+                        MessageEntity(type=MessageEntity.BOLD, offset=0, length=_utf16_len(header)),
+                    ] + [
+                        MessageEntity(type=e["type"], offset=e["offset"] + draft_offset,
+                                      length=e["length"], url=e.get("url"))
+                        for e in draft_entities
+                    ]
                     await bot.send_message_draft(
                         chat_id=chat_id,
                         draft_id=draft_id,
-                        text=accumulated,
+                        text=draft_full_text,
+                        entities=draft_full_entities,
                         message_thread_id=thread_id,
                     )
                     last_sent_len = len(accumulated)
