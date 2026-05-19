@@ -14,19 +14,23 @@ _CACHE_TTL_HOURS = 24
 
 
 class InsightSummaryCacheRepo:
-    """Read/write Gemini summary results cached by (video_id, lang, command)."""
+    """Read/write cached LLM results by (content_key, lang, command).
+
+    content_key is a YouTube video ID for /summary and /about, or a
+    normalized URL for /tldr on web pages.
+    """
 
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._sf = session_factory
 
-    async def get(self, video_id: str, lang: str, command: str) -> str | None:
+    async def get(self, content_key: str, lang: str, command: str) -> str | None:
         """Return cached result if it exists and has not expired."""
         now = datetime.now(timezone.utc)
         async with self._sf() as s:
             result = await s.execute(
                 select(InsightSummaryCache.result)
                 .where(
-                    InsightSummaryCache.video_id == video_id,
+                    InsightSummaryCache.content_key == content_key,
                     InsightSummaryCache.lang == lang,
                     InsightSummaryCache.command == command,
                     InsightSummaryCache.expires_at > now,
@@ -35,7 +39,7 @@ class InsightSummaryCacheRepo:
             row = result.scalar_one_or_none()
             return row
 
-    async def set(self, video_id: str, lang: str, command: str, result: str) -> None:
+    async def set(self, content_key: str, lang: str, command: str, result: str) -> None:
         """Upsert a cached result with a fresh TTL."""
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(hours=_CACHE_TTL_HOURS)
@@ -43,7 +47,7 @@ class InsightSummaryCacheRepo:
             stmt = (
                 pg_insert(InsightSummaryCache)
                 .values(
-                    video_id=video_id,
+                    content_key=content_key,
                     lang=lang,
                     command=command,
                     result=result,
@@ -79,6 +83,28 @@ class InsightUserSettingsRepo:
         async with self._sf() as s:
             row = await s.get(InsightUserSettings, user_id)
             return row.lang if row is not None else default
+
+    async def get_tldr_model(self, user_id: int) -> str | None:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            return row.tldr_model if row is not None else None
+
+    async def set_tldr_model(self, user_id: int, model: str | None) -> InsightUserSettings:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            if row is None:
+                user = await s.get(User, user_id)
+                if user is None:
+                    user = User(id=user_id)
+                    s.add(user)
+                    await s.flush()
+                row = InsightUserSettings(user_id=user_id, tldr_model=model)
+                s.add(row)
+            else:
+                row.tldr_model = model
+            await s.commit()
+            await s.refresh(row)
+            return row
 
     async def set_lang(self, user_id: int, lang: str) -> InsightUserSettings:
         async with self._sf() as s:
@@ -206,16 +232,29 @@ class InsightUsageLogRepo:
             await s.commit()
 
     async def count_today(self, user_id: int) -> int:
-        """Count successful Gemini calls for this user since UTC midnight.
+        """Count all successful LLM calls for this user since UTC midnight (all commands).
 
-        Used by the rate-limit gate in run_insight_command. 'cached' status
-        rows are not counted (no API hit) - only status='ok'.
+        'cached' rows are not counted - only status='ok'.
         """
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         async with self._sf() as s:
             result = await s.execute(
                 select(func.count()).select_from(InsightUsageLog).where(
                     InsightUsageLog.user_id == user_id,
+                    InsightUsageLog.status == "ok",
+                    InsightUsageLog.created_at >= today_start,
+                )
+            )
+            return result.scalar() or 0
+
+    async def count_today_command(self, user_id: int, command: str) -> int:
+        """Count successful calls for a specific command today (status='ok' only)."""
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        async with self._sf() as s:
+            result = await s.execute(
+                select(func.count()).select_from(InsightUsageLog).where(
+                    InsightUsageLog.user_id == user_id,
+                    InsightUsageLog.command == command,
                     InsightUsageLog.status == "ok",
                     InsightUsageLog.created_at >= today_start,
                 )

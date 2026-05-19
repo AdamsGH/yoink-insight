@@ -26,11 +26,29 @@ class InsightAccessGrant(BaseModel):
 
 class InsightSettingsUpdate(BaseModel):
     lang: str
+    tldr_model: str | None = None
 
 
 class InsightUserSettingsResponse(BaseModel):
     lang: str
     has_access: bool
+    has_tldr_access: bool = False
+    tldr_model: str | None = None
+    tldr_allowed_models: list[str] = []
+
+
+class TldrConfigResponse(BaseModel):
+    allowed_models: list[str]
+    default_model: str
+    gateway_base_url: str
+    gateway_api_key: str
+
+
+class TldrConfigUpdate(BaseModel):
+    allowed_models: list[str]
+    default_model: str
+    gateway_base_url: str
+    gateway_api_key: str
 
 
 class UserLookupResult(BaseModel):

@@ -1,6 +1,7 @@
 commands:
   - {command: about,          description: "Описание YouTube видео",          scope: default}
   - {command: summary,        description: "Краткое содержание YouTube видео", scope: default}
+  - {command: tldr,           description: "Краткое содержание любой ссылки", scope: default}
   - {command: insight_lang,   description: "Язык ответов Insight",            scope: private}
   - {command: insight_grant,  description: "Выдать доступ к Insight",         scope: private, min_role: admin}
   - {command: insight_revoke, description: "Отозвать доступ к Insight",       scope: private, min_role: admin}
@@ -10,6 +11,9 @@ help_sections:
   insight:
     title: "AI Аналитика"
     footer: "Команды видны только пользователям с доступом к Insight."
+  tldr:
+    title: "TLDR"
+    footer: "Краткое содержание любой ссылки или YouTube-видео. Требует отдельного доступа."
   admin_insight:
     title: "Управление Insight"
 
@@ -32,6 +36,18 @@ insight:
     rate_limited: "Достигнут дневной лимит Insight ({limit} запросов в сутки). Кешированные ответы доступны; новые запросы - после полуночи UTC."
   about_header: "📺 <b>О видео</b>"
   summary_header: "📋 <b>Краткое содержание</b>"
+
+tldr:
+  header: "🔗 <b>Краткое содержание</b>"
+  no_url: "Укажите ссылку. Использование: /tldr <ссылка> [вопрос]"
+  error:
+    fetch_error: "Не удалось загрузить страницу. Проверьте ссылку и попробуйте снова."
+    no_content: "Не удалось извлечь текст с этой страницы."
+    no_transcript: "Для этого видео нет транскрипта."
+    gateway_unavailable: "Сервис транскриптов временно недоступен. Попробуйте позже."
+    transcript_error: "Не удалось получить транскрипт видео."
+    llm_error: "Ошибка сервиса суммаризации. Попробуйте позже."
+    rate_limited: "Достигнут дневной лимит TLDR ({limit} запросов в сутки). Новые запросы после полуночи UTC."
 
 insight_lang:
   current: "Текущий язык: <b>{lang}</b>"

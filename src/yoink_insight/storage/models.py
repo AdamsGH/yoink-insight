@@ -12,8 +12,8 @@ from yoink.core.db.base import Base, _now
 class InsightUserSettings(Base):
     """Per-user settings for the Insight plugin.
 
-    Stores preferences (e.g. summary language) separately from access grants.
-    Access is controlled by user_permissions(plugin='insight', feature='summary').
+    Stores preferences (e.g. summary language, tldr model) separately from access grants.
+    Access is controlled by user_permissions(plugin='insight', feature='...').
     """
     __tablename__ = "insight_user_settings"
 
@@ -23,6 +23,7 @@ class InsightUserSettings(Base):
         primary_key=True,
     )
     lang: Mapped[str] = mapped_column(String(8), default="en", nullable=False)
+    tldr_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class InsightAccess(Base):
@@ -46,14 +47,15 @@ class InsightAccess(Base):
 
 
 class InsightSummaryCache(Base):
-    """Cached Gemini summary/description results keyed by (video_id, lang, command).
+    """Cached LLM results keyed by (content_key, lang, command).
 
-    TTL is 24 hours. Avoids duplicate Gemini API calls for the same video.
+    content_key is a YouTube video ID for /summary and /about, or a full URL
+    for /tldr on web pages. TTL is 24 hours.
     """
     __tablename__ = "insight_summary_cache"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    video_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_key: Mapped[str] = mapped_column(String(512), nullable=False)
     lang: Mapped[str] = mapped_column(String(8), nullable=False)
     command: Mapped[str] = mapped_column(String(16), nullable=False)
     result: Mapped[str] = mapped_column(Text, nullable=False)

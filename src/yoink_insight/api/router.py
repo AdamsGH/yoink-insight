@@ -19,6 +19,8 @@ from yoink_insight.api.schemas import (
     InsightAccessResponse,
     InsightSettingsUpdate,
     InsightUserSettingsResponse,
+    TldrConfigResponse,
+    TldrConfigUpdate,
     UserLookupResult,
 )
 from yoink_insight.config import InsightConfig
@@ -176,6 +178,24 @@ async def revoke_insight_access(
     await session.commit()
 
 
+async def _has_feature_access(session: AsyncSession, user: User, feature: str) -> bool:
+    """Check effective access for any insight plugin feature."""
+    if _is_owner(user):
+        return True
+    now = datetime.now(timezone.utc)
+    from sqlalchemy import select as sa_select
+    from yoink.core.db.models import UserPermission
+    result = await session.execute(
+        sa_select(UserPermission.id).where(
+            UserPermission.user_id == user.id,
+            UserPermission.plugin == "insight",
+            UserPermission.feature == feature,
+            (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def _has_insight_access(session: AsyncSession, user: User) -> bool:
     """Check effective access: owner, user_permissions grant, or legacy insight_access row."""
     from datetime import timezone
@@ -263,27 +283,217 @@ async def get_my_insight_settings(
     current_user: User = Depends(get_current_user),
 ) -> InsightUserSettingsResponse:
     has_access = await _has_insight_access(session, current_user)
+    has_tldr = await _has_feature_access(session, current_user, "tldr")
     config = InsightConfig()
     settings_row = await session.get(InsightUserSettings, current_user.id)
     lang = settings_row.lang if settings_row else config.insight_default_lang
-    return InsightUserSettingsResponse(lang=lang, has_access=has_access)
+    tldr_model = settings_row.tldr_model if settings_row else None
+    allowed = await _get_tldr_allowed_models_from_db(session, config)
+    return InsightUserSettingsResponse(
+        lang=lang,
+        has_access=has_access,
+        has_tldr_access=has_tldr,
+        tldr_model=tldr_model,
+        tldr_allowed_models=allowed if has_tldr else [],
+    )
 
 
-@router.patch("/settings/me", response_model=InsightUserSettingsResponse, summary="Update my AI summary settings", description="Fields: `language` (override summary language, null = use user locale), `detail_level` (`brief`/`detailed`).")
+@router.patch("/settings/me", response_model=InsightUserSettingsResponse, summary="Update my AI summary settings")
 async def update_my_insight_settings(
     body: InsightSettingsUpdate,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InsightUserSettingsResponse:
-    if not await _has_insight_access(session, current_user):
+    has_access = await _has_insight_access(session, current_user)
+    has_tldr = await _has_feature_access(session, current_user, "tldr")
+    if not has_access and not has_tldr:
         raise HTTPException(status_code=403, detail="You do not have Insight access.")
+
+    config = InsightConfig()
+
+    # Validate tldr_model against allowed list (owner bypasses)
+    tldr_model = body.tldr_model
+    if tldr_model is not None and not _is_owner(current_user):
+        allowed = await _get_tldr_allowed_models_from_db(session, config)
+        if tldr_model not in allowed:
+            raise HTTPException(status_code=400, detail=f"Model '{tldr_model}' is not in the allowed list.")
 
     settings_row = await session.get(InsightUserSettings, current_user.id)
     if settings_row is None:
-        settings_row = InsightUserSettings(user_id=current_user.id, lang=body.lang)
+        settings_row = InsightUserSettings(
+            user_id=current_user.id,
+            lang=body.lang,
+            tldr_model=tldr_model,
+        )
         session.add(settings_row)
     else:
         settings_row.lang = body.lang
+        if tldr_model is not None or body.tldr_model is not None:
+            settings_row.tldr_model = tldr_model
     await session.commit()
     await session.refresh(settings_row)
-    return InsightUserSettingsResponse(lang=settings_row.lang, has_access=True)
+    allowed = await _get_tldr_allowed_models_from_db(session, config)
+    return InsightUserSettingsResponse(
+        lang=settings_row.lang,
+        has_access=has_access,
+        has_tldr_access=has_tldr,
+        tldr_model=settings_row.tldr_model,
+        tldr_allowed_models=allowed if has_tldr else [],
+    )
+
+
+# --- TLDR config (admin/owner) ---
+
+_TLDR_ALLOWED_KEY = "insight_tldr_allowed_models"
+_TLDR_DEFAULT_KEY = "insight_tldr_default_model"
+_TLDR_GW_URL_KEY = "insight_tldr_gateway_url"
+_TLDR_GW_KEY_KEY = "insight_tldr_gateway_key"
+
+
+async def _get_tldr_allowed_models_from_db(session: AsyncSession, config: InsightConfig) -> list[str]:
+    """Load allowed_models from bot_settings, fall back to [default_model]."""
+    import json
+    from yoink.core.db.models import BotSetting
+    row = await session.get(BotSetting, _TLDR_ALLOWED_KEY)
+    if row and row.value:
+        try:
+            val = json.loads(row.value)
+            if isinstance(val, list):
+                return val
+        except Exception:
+            pass
+    return [config.tldr_llm_model]
+
+
+async def _get_tldr_default_model_from_db(session: AsyncSession, config: InsightConfig) -> str:
+    from yoink.core.db.models import BotSetting
+    row = await session.get(BotSetting, _TLDR_DEFAULT_KEY)
+    if row and row.value:
+        return row.value
+    return config.tldr_llm_model
+
+
+@router.get("/config/tldr", response_model=TldrConfigResponse, summary="Get TLDR model config (admin+)")
+async def get_tldr_config(
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> TldrConfigResponse:
+    from yoink.core.db.models import BotSetting
+    config = InsightConfig()
+    allowed = await _get_tldr_allowed_models_from_db(session, config)
+    default = await _get_tldr_default_model_from_db(session, config)
+    gw_url_row = await session.get(BotSetting, _TLDR_GW_URL_KEY)
+    gw_key_row = await session.get(BotSetting, _TLDR_GW_KEY_KEY)
+    return TldrConfigResponse(
+        allowed_models=allowed,
+        default_model=default,
+        gateway_base_url=(gw_url_row.value if gw_url_row is not None else None) or config.gateway_base_url,
+        gateway_api_key=(gw_key_row.value if gw_key_row is not None else None) or "",
+    )
+
+
+@router.patch("/config/tldr", response_model=TldrConfigResponse, summary="Update TLDR model config (admin+)")
+async def update_tldr_config(
+    body: TldrConfigUpdate,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> TldrConfigResponse:
+    import json
+    from yoink.core.db.models import BotSetting
+    if not body.allowed_models:
+        raise HTTPException(status_code=400, detail="allowed_models must not be empty.")
+    if body.default_model not in body.allowed_models:
+        raise HTTPException(status_code=400, detail="default_model must be in allowed_models.")
+
+    for key, value in [
+        (_TLDR_ALLOWED_KEY, json.dumps(body.allowed_models)),
+        (_TLDR_DEFAULT_KEY, body.default_model),
+        (_TLDR_GW_URL_KEY, body.gateway_base_url.rstrip("/")),
+        (_TLDR_GW_KEY_KEY, body.gateway_api_key),
+    ]:
+        row = await session.get(BotSetting, key)
+        if row is None:
+            session.add(BotSetting(key=key, value=value))
+        else:
+            row.value = value
+    await session.commit()
+    return TldrConfigResponse(
+        allowed_models=body.allowed_models,
+        default_model=body.default_model,
+        gateway_base_url=body.gateway_base_url.rstrip("/"),
+        gateway_api_key=body.gateway_api_key,
+    )
+
+
+@router.get("/models", summary="List available LLM models for TLDR")
+async def list_tldr_models(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    """Owner sees all gateway models (via stored gateway URL); others see the allowed list."""
+    config = InsightConfig()
+    if _is_owner(current_user):
+        gw_url, gw_key = await _get_gateway_settings(session, config)
+        return await _fetch_gateway_models(gw_url, gw_key, config)
+    allowed = await _get_tldr_allowed_models_from_db(session, config)
+    return [{"id": m} for m in allowed]
+
+
+@router.get("/config/test", summary="Test gateway connectivity (admin+)")
+async def test_gateway(
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+    url: str | None = None,
+    api_key: str | None = None,
+) -> dict:
+    """Probe gateway /v1/models. Uses provided url/api_key if given, else falls back to bot_settings."""
+    import httpx
+    config = InsightConfig()
+    if url:
+        gw_url, gw_key = url.rstrip("/"), api_key or ""
+    else:
+        gw_url, gw_key = await _get_gateway_settings(session, config)
+    endpoint = gw_url.rstrip("/") + "/v1/models"
+    headers: dict[str, str] = {}
+    if gw_key:
+        headers["Authorization"] = f"Bearer {gw_key}"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(endpoint, headers=headers)
+        if resp.status_code == 200:
+            models = resp.json().get("data", [])
+            return {"ok": True, "model_count": len(models), "url": gw_url}
+        return {"ok": False, "error": f"HTTP {resp.status_code}", "url": gw_url}
+    except httpx.ConnectError:
+        return {"ok": False, "error": "Connection refused", "url": gw_url}
+    except httpx.TimeoutException:
+        return {"ok": False, "error": "Timeout", "url": gw_url}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "url": gw_url}
+
+
+async def _get_gateway_settings(session: AsyncSession, config: InsightConfig) -> tuple[str, str]:
+    """Return (gateway_base_url, gateway_api_key) from bot_settings, falling back to InsightConfig."""
+    from yoink.core.db.models import BotSetting
+    gw_url_row = await session.get(BotSetting, _TLDR_GW_URL_KEY)
+    gw_key_row = await session.get(BotSetting, _TLDR_GW_KEY_KEY)
+    gw_url = (gw_url_row.value if gw_url_row is not None else None) or config.gateway_base_url
+    gw_key = (gw_key_row.value if gw_key_row is not None else None) or config.gateway_api_key
+    return gw_url, gw_key
+
+
+async def _fetch_gateway_models(gw_url: str, gw_key: str, config: InsightConfig) -> list[dict]:
+    import httpx
+    endpoint = gw_url.rstrip("/") + "/v1/models"
+    headers: dict[str, str] = {}
+    if gw_key:
+        headers["Authorization"] = f"Bearer {gw_key}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(endpoint, headers=headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("data", [])
+    except Exception:
+        pass
+    return [{"id": config.tldr_llm_model}]

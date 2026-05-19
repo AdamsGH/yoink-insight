@@ -66,6 +66,16 @@ class InsightPlugin:
                     min_role="admin",
                 ),
             ),
+            WebPage(
+                path="/admin/insight-tldr",
+                sidebar=SidebarEntry(
+                    label="TLDR Config",
+                    icon="Link",
+                    path="/admin/insight-tldr",
+                    section="admin",
+                    min_role="admin",
+                ),
+            ),
         ])
 
     def get_commands(self) -> list:
@@ -137,17 +147,19 @@ class InsightPlugin:
         ]
 
         _SECTION_ORDER = [
-            ("user",  "insight",       ("default", "private")),
-            ("admin", "admin_insight", ("default", "private")),
+            ("user",  "insight",       ("default", "private"), "insight:summary"),
+            ("user",  "tldr",          ("default", "private"), "insight:tldr"),
+            ("admin", "admin_insight", ("default", "private"), None),
         ]
 
         parts: list[str] = []
-        for min_role, section_key, scopes in _SECTION_ORDER:
+        for min_role, section_key, scopes, section_feature in _SECTION_ORDER:
             if _ROLE_RANK.get(min_role, 0) > rank:
                 continue
             sec_cmds = [
                 c for c in visible
                 if c.min_role == min_role and c.scope in scopes
+                and (section_feature is None or c.required_feature == section_feature)
             ]
             if not sec_cmds:
                 continue
@@ -173,6 +185,13 @@ class InsightPlugin:
                 feature="summary",
                 label="AI Summary",
                 description="Access to /summary and /about commands (YouTube transcript + Gemini)",
+                default_min_role=None,  # explicit grant required; owner always passes
+            ),
+            FeatureSpec(
+                plugin="insight",
+                feature="tldr",
+                label="TLDR",
+                description="Access to /tldr command (any URL summarised via gateway LLM)",
                 default_min_role=None,  # explicit grant required; owner always passes
             ),
         ]

@@ -42,9 +42,11 @@ async def run_insight_command(
       4. Cache the result.
     """
     video_id = _extract_video_id(url)
+    # For /summary and /about the cache key is the bare video ID.
+    cache_key = video_id
 
     # Cache hit - instant response (does not count against rate limit)
-    cached = await cache_repo.get(video_id, lang, command) if video_id else None
+    cached = await cache_repo.get(cache_key, lang, command) if cache_key else None
     if cached:
         await thinking_msg.edit_text(f"{header}\n\n{cached}", parse_mode="HTML")
         await usage_repo.log(user_id, command, video_id=video_id, lang=lang, status="cached")
@@ -109,14 +111,25 @@ async def run_insight_command(
         await usage_repo.log(user_id, command, video_id=video_id, lang=lang, status="error", error_code="empty_response")
         return
 
-    # Finalize - replaces the "thinking" message with the real content
+    # Finalize: send permanent message, then delete the "thinking" placeholder.
+    # edit_text on thinking_msg leaves the draft dangling ("typing" indicator stays).
     final_text = f"{header}\n\n{accumulated.strip()}"
-    await thinking_msg.edit_text(final_text, parse_mode="HTML")
+    await bot.send_message(
+        chat_id=chat_id,
+        text=final_text,
+        parse_mode="HTML",
+        reply_to_message_id=thinking_msg.reply_to_message.message_id if thinking_msg.reply_to_message else None,
+        message_thread_id=thread_id,
+    )
+    try:
+        await thinking_msg.delete()
+    except Exception:
+        pass
 
     # Cache for future requests
-    if video_id:
+    if cache_key:
         try:
-            await cache_repo.set(video_id, lang, command, accumulated.strip())
+            await cache_repo.set(cache_key, lang, command, accumulated.strip())
         except Exception as cache_err:
             logger.debug("Failed to cache insight result: %s", cache_err)
 

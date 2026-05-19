@@ -1,6 +1,7 @@
 commands:
   - {command: about,          description: "Describe a YouTube video",    scope: default, required_feature: "insight:summary"}
   - {command: summary,        description: "Summarize a YouTube video",   scope: default, required_feature: "insight:summary"}
+  - {command: tldr,           description: "Summarize any URL",           scope: default, required_feature: "insight:tldr"}
   - {command: insight_lang,   description: "Set Insight language",        scope: private, required_feature: "insight:summary"}
   - {command: insight_grant,  description: "Grant Insight access",        scope: private, min_role: admin}
   - {command: insight_revoke, description: "Revoke Insight access",       scope: private, min_role: admin}
@@ -10,6 +11,9 @@ help_sections:
   insight:
     title: "AI Insights"
     footer: "Commands are only visible when you have Insight access."
+  tldr:
+    title: "TLDR"
+    footer: "Summarise any URL or YouTube video. Requires separate TLDR access."
   admin_insight:
     title: "Insight Admin"
 
@@ -32,6 +36,18 @@ insight:
     rate_limited: "Daily Insight quota reached ({limit} calls/day). Cached lookups still work; try again after UTC midnight."
   about_header: "📺 <b>About this video</b>"
   summary_header: "📋 <b>Summary</b>"
+
+tldr:
+  header: "🔗 <b>Summary</b>"
+  no_url: "Please provide a URL. Usage: /tldr <url> [question]"
+  error:
+    fetch_error: "Could not fetch the page. Check the URL and try again."
+    no_content: "Could not extract readable text from this page."
+    no_transcript: "No transcript available for this video."
+    gateway_unavailable: "Transcript service is temporarily unavailable. Try again later."
+    transcript_error: "Failed to fetch the video transcript."
+    llm_error: "Summary service error. Please try again later."
+    rate_limited: "Daily TLDR quota reached ({limit} calls/day). Try again after UTC midnight."
 
 insight_lang:
   current: "Current language: <b>{lang}</b>"

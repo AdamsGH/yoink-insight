@@ -1,0 +1,217 @@
+"""TldrService - fetch content from a URL and summarise it via gateway LLM.
+
+Supports:
+  - YouTube URLs: transcript fetched via gateway POST /youtube/transcript
+  - Web pages: HTML fetched with httpx, text extracted with trafilatura
+  - Optional focus question steers the Gemini/LLM prompt
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from urllib.parse import urlparse
+
+import httpx
+import trafilatura
+
+from yoink_insight.config import InsightConfig
+
+logger = logging.getLogger(__name__)
+
+_YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"}
+
+_TLDR_PROMPT = """\
+Below is content fetched from {source_desc}.
+{question_line}
+Provide a concise summary: key points as a bullet list (max 12 bullets). \
+Reply in {lang}. Output only the bullet list, no preamble.
+
+Content:
+{content}
+"""
+
+_TLDR_QUESTION_PROMPT = """\
+Below is content fetched from {source_desc}.
+Answer the following question based on this content: {question}
+Be concise and factual. Reply in {lang}. Output only the answer, no preamble.
+
+Content:
+{content}
+"""
+
+# Characters streamed before we send a draft update to Telegram
+_DRAFT_MIN_CHARS = 80
+
+
+class TldrError(Exception):
+    """Raised when /tldr fails with a user-visible error code."""
+
+
+def _is_youtube(url: str) -> bool:
+    try:
+        host = urlparse(url).hostname or ""
+        return host in _YOUTUBE_HOSTS
+    except Exception:
+        return False
+
+
+async def _fetch_youtube_transcript(url: str, config: InsightConfig) -> str:
+    """Call gateway POST /youtube/transcript and return plain text."""
+    endpoint = config.gateway_base_url.rstrip("/") + "/youtube/transcript"
+    headers: dict[str, str] = {}
+    if config.gateway_api_key:
+        headers["X-API-Key"] = config.gateway_api_key
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.post(
+                endpoint,
+                json={"video_url": url, "formatter": "text", "backend": "auto"},
+                headers=headers,
+            )
+        except httpx.RequestError as exc:
+            logger.error("Gateway transcript request failed: %s", exc)
+            raise TldrError("gateway_unavailable") from exc
+
+    if resp.status_code == 200:
+        data = resp.json()
+        transcript = data.get("transcript", "")
+        if not transcript or not transcript.strip():
+            raise TldrError("no_transcript")
+        return transcript
+    if resp.status_code == 404:
+        raise TldrError("no_transcript")
+    logger.error("Gateway transcript returned %d: %s", resp.status_code, resp.text[:200])
+    raise TldrError("transcript_error")
+
+
+async def _fetch_web_content(url: str, max_chars: int) -> str:
+    """Fetch a web page and extract main text via trafilatura."""
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        follow_redirects=True,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; yoink-insight/1.0)"},
+    ) as client:
+        try:
+            resp = await client.get(url)
+        except httpx.RequestError as exc:
+            logger.warning("Web fetch failed for %s: %s", url, exc)
+            raise TldrError("fetch_error") from exc
+
+    if resp.status_code >= 400:
+        raise TldrError("fetch_error")
+
+    html = resp.text
+    text = await asyncio.to_thread(
+        trafilatura.extract,
+        html,
+        include_comments=False,
+        include_tables=True,
+        no_fallback=False,
+    )
+    if not text or not text.strip():
+        raise TldrError("no_content")
+
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n[Content truncated]"
+
+    return text
+
+
+def _build_prompt(
+    content: str,
+    source_desc: str,
+    lang: str,
+    question: str | None,
+) -> str:
+    if question:
+        return _TLDR_QUESTION_PROMPT.format(
+            source_desc=source_desc,
+            question=question,
+            lang=lang,
+            content=content,
+        )
+    return _TLDR_PROMPT.format(
+        source_desc=source_desc,
+        question_line="",
+        lang=lang,
+        content=content,
+    )
+
+
+async def stream_tldr(
+    url: str,
+    lang: str,
+    config: InsightConfig,
+    question: str | None = None,
+    model: str | None = None,
+):
+    """Fetch content and stream LLM summary chunks.
+
+    Yields str chunks. Raises TldrError on failure.
+    """
+    is_yt = _is_youtube(url)
+
+    if is_yt:
+        content = await _fetch_youtube_transcript(url, config)
+        source_desc = f"YouTube video ({url})"
+    else:
+        content = await _fetch_web_content(url, config.tldr_max_content_chars)
+        # Strip query/fragment for display
+        parsed = urlparse(url)
+        source_desc = parsed.netloc + parsed.path
+
+    prompt = _build_prompt(content, source_desc, lang, question)
+
+    endpoint = config.gateway_base_url.rstrip("/") + "/v1/chat/completions"
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if config.gateway_api_key:
+        headers["Authorization"] = f"Bearer {config.gateway_api_key}"
+
+    body = {
+        "model": model or config.tldr_llm_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+    }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            async with client.stream("POST", endpoint, json=body, headers=headers) as resp:
+                if resp.status_code != 200:
+                    body_text = await resp.aread()
+                    logger.error("LLM stream error %d: %s", resp.status_code, body_text[:200])
+                    raise TldrError("llm_error")
+
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        import json
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0]["delta"].get("content") or ""
+                        if delta:
+                            yield delta
+                    except Exception:
+                        continue
+
+        except httpx.RequestError as exc:
+            logger.error("LLM stream request failed: %s", exc)
+            raise TldrError("llm_error") from exc
+
+
+def cache_key_for_url(url: str) -> str:
+    """Return the cache key to use for a given URL.
+
+    For YouTube we use the bare video ID (matches /summary//about cache).
+    For web pages we use the normalized URL (scheme + netloc + path, no query/fragment).
+    """
+    if _is_youtube(url):
+        # Re-use the same video-ID extraction as gemini.py
+        from yoink_insight.services.gemini import _extract_video_id
+        vid = _extract_video_id(url)
+        return vid or url
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
