@@ -420,10 +420,10 @@ export default function InsightSettingsPage() {
         </Card>
 
         {/* Save */}
-        {(data?.has_access || data?.has_tldr_access) && (
+        {dirty && (
           <Button
             onClick={save}
-            disabled={saving || !dirty}
+            disabled={saving}
             size="sm"
             className="w-full"
           >
