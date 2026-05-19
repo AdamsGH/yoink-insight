@@ -199,8 +199,8 @@ export default function InsightSettingsPage() {
   const isOwner = identity?.role === 'owner'
 
   const [data, setData] = useState<InsightSettings | null>(null)
-  const [lang, setLang] = useState('en')
-  const [tldrModel, setTldrModel] = useState<string>('')
+  const [lang, setLang] = useState<string | null>(null)
+  const [tldrModel, setTldrModel] = useState<string | null>(null)
   const [allModels, setAllModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [githubToken, setGithubToken] = useState<string>('')
@@ -258,9 +258,9 @@ export default function InsightSettingsPage() {
   const save = async () => {
     setSaving(true)
     try {
-      const body: { lang?: string; tldr_model?: string | null; github_token?: string | null } = { lang }
+      const body: { lang?: string; tldr_model?: string | null; github_token?: string | null } = { lang: lang ?? data?.lang }
       if (data?.has_tldr_access) {
-        body.tldr_model = tldrModel || null
+        body.tldr_model = tldrModel ?? data?.tldr_model ?? null
         if (githubToken === '__clear__') {
           body.github_token = ''
         } else if (githubToken !== '') {
@@ -322,8 +322,8 @@ export default function InsightSettingsPage() {
     return <div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div>
   }
 
-  const langDirty = data !== null && lang !== data.lang
-  const tldrDirty = data !== null && data.has_tldr_access && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
+  const langDirty = data !== null && lang !== null && lang !== data.lang
+  const tldrDirty = data !== null && data.has_tldr_access && tldrModel !== null && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
   const githubDirty = data !== null && data.has_tldr_access && githubToken !== ''
   const dirty = langDirty || tldrDirty || githubDirty
 
@@ -371,7 +371,7 @@ export default function InsightSettingsPage() {
             {data?.has_access ? (
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">{t('insight.settings_lang_label')}</Label>
-                <Select value={lang} onValueChange={setLang}>
+                <Select value={lang ?? data?.lang ?? 'en'} onValueChange={setLang}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -432,7 +432,7 @@ export default function InsightSettingsPage() {
                   itemToStringValue={(m: string) => m}
                 >
                   <ComboboxInput
-                    value={tldrModel}
+                    value={tldrModel ?? data?.tldr_model ?? data?.tldr_allowed_models[0] ?? ''}
                     placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select model...' })}
                     className="font-mono text-xs"
                   />
