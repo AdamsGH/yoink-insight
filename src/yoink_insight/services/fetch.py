@@ -96,6 +96,16 @@ def _parse_github_url(url: str) -> dict | None:
     return {"op": "repo_info", "owner": owner, "repo": repo}
 
 
+def _to_toon(data: object) -> str:
+    """Encode a JSON-serializable object as TOON for token-efficient LLM input."""
+    try:
+        from toon_format import encode  # noqa: PLC0415
+        return encode(data)
+    except Exception:
+        import json  # noqa: PLC0415
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
+
 async def _github_fetch(route: dict, token: str | None) -> str:
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     if token:
@@ -114,7 +124,7 @@ async def _github_fetch(route: dict, token: str | None) -> str:
         if op == "api_passthrough":
             r = await client.get(f"{base}/{route['path']}")
             r.raise_for_status()
-            return _format_json(r.json())
+            return _to_toon(r.json())
 
         if op == "file":
             # Try raw first (no API rate limit hit)
@@ -130,7 +140,7 @@ async def _github_fetch(route: dict, token: str | None) -> str:
             data = r.json()
             if isinstance(data, dict) and data.get("encoding") == "base64":
                 return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-            return _format_json(data)
+            return _to_toon(data)
 
         if op == "tree":
             api_url = f"{base}/repos/{route['owner']}/{route['repo']}/git/trees/{route['ref']}?recursive=1"
@@ -194,12 +204,11 @@ async def _github_fetch(route: dict, token: str | None) -> str:
                 params={"state": route.get("state", "open"), "per_page": 30},
             )
             r.raise_for_status()
-            lines = [f"## Issues ({route.get('state','open')})"]
-            for i in r.json():
-                if "pull_request" in i:
-                    continue
-                lines.append(f"#{i['number']} [{i['state']}] {i['title']}  (@{i['user']['login']})")
-            return "\n".join(lines)
+            items = [
+                {"number": i["number"], "state": i["state"], "title": i["title"], "author": i["user"]["login"]}
+                for i in r.json() if "pull_request" not in i
+            ]
+            return f"## Issues ({route.get('state', 'open')})\n" + _to_toon(items)
 
         if op == "pr":
             r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/pulls/{route['number']}")
@@ -225,10 +234,11 @@ async def _github_fetch(route: dict, token: str | None) -> str:
                 params={"state": route.get("state", "open"), "per_page": 30},
             )
             r.raise_for_status()
-            lines = [f"## Pull requests ({route.get('state','open')})"]
-            for pr in r.json():
-                lines.append(f"#{pr['number']} [{pr['state']}] {pr['title']}  (@{pr['user']['login']})")
-            return "\n".join(lines)
+            items = [
+                {"number": pr["number"], "state": pr["state"], "title": pr["title"], "author": pr["user"]["login"]}
+                for pr in r.json()
+            ]
+            return f"## Pull requests ({route.get('state', 'open')})\n" + _to_toon(items)
 
         if op == "commits":
             params: dict = {"per_page": 30}
@@ -236,31 +246,23 @@ async def _github_fetch(route: dict, token: str | None) -> str:
                 params["sha"] = route["branch"]
             r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/commits", params=params)
             r.raise_for_status()
-            lines = ["## Commits"]
-            for c in r.json():
-                sha = c["sha"][:8]
-                msg = (c["commit"]["message"].splitlines()[0])[:80]
-                author = c["commit"]["author"]["name"]
-                lines.append(f"{sha}  {msg}  ({author})")
-            return "\n".join(lines)
+            items = [
+                {"sha": c["sha"][:8], "message": c["commit"]["message"].splitlines()[0][:80], "author": c["commit"]["author"]["name"]}
+                for c in r.json()
+            ]
+            return "## Commits\n" + _to_toon(items)
 
         if op == "releases":
             r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/releases?per_page=10")
             r.raise_for_status()
-            lines = ["## Releases"]
-            for rel in r.json():
-                lines.append(f"{rel['tag_name']}  {rel['name']}  ({rel.get('published_at','')[:10]})")
-                if rel.get("body"):
-                    lines.append(rel["body"][:500])
-                lines.append("")
-            return "\n".join(lines)
+            items = [
+                {"tag": rel["tag_name"], "name": rel["name"], "published": rel.get("published_at", "")[:10], "body": (rel.get("body") or "")[:300]}
+                for rel in r.json()
+            ]
+            return "## Releases\n" + _to_toon(items)
 
     return ""
 
-
-def _format_json(data: object) -> str:
-    import json
-    return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------

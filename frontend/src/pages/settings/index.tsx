@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { BrainCircuit, Link, LockKeyhole } from 'lucide-react'
+import { useGetIdentity } from '@refinedev/core'
+import { BrainCircuit, Link, LockKeyhole, RefreshCw } from 'lucide-react'
 
 import { insightApi, type InsightSettings } from '@insight/api/insight'
 import { formatDate } from '@core/lib/utils'
-import { Button, Card, CardContent, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@ui'
+import {
+  Button, Card, CardContent, Input, Label,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList,
+} from '@ui'
 import { toast } from '@core/components/ui/toast'
+import type { User } from '@core/types/api'
 
 const LANG_OPTIONS = [
   { value: 'en', label: 'English' },
@@ -14,12 +20,29 @@ const LANG_OPTIONS = [
 
 export default function InsightSettingsPage() {
   const { t } = useTranslation()
+  const { data: identity } = useGetIdentity<User>()
+  const isOwner = identity?.role === 'owner'
+
   const [data, setData] = useState<InsightSettings | null>(null)
   const [lang, setLang] = useState('en')
   const [tldrModel, setTldrModel] = useState<string>('')
+  const [allModels, setAllModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
   const [githubToken, setGithubToken] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+
+  const loadModels = async () => {
+    setLoadingModels(true)
+    try {
+      const res = await insightApi.listModels()
+      setAllModels(res.data.map((m) => m.id))
+    } catch {
+      toast.error(t('common.load_error'))
+    } finally {
+      setLoadingModels(false)
+    }
+  }
 
   useEffect(() => {
     insightApi
@@ -29,10 +52,19 @@ export default function InsightSettingsPage() {
         setLang(res.data.lang)
         setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
         setGithubToken('')
+        if (res.data.has_tldr_access) {
+          // owner loads full list from gateway; regular user uses allowed_models from settings
+          if (identity?.role === 'owner') {
+            loadModels()
+          } else {
+            setAllModels(res.data.tldr_allowed_models)
+          }
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity?.role])
 
   const save = async () => {
     setSaving(true)
@@ -40,7 +72,11 @@ export default function InsightSettingsPage() {
       const body: { lang?: string; tldr_model?: string | null; github_token?: string | null } = { lang }
       if (data?.has_tldr_access) {
         body.tldr_model = tldrModel || null
-        if (githubToken !== '') body.github_token = githubToken || null
+        if (githubToken === '__clear__') {
+          body.github_token = ''
+        } else if (githubToken !== '') {
+          body.github_token = githubToken
+        }
       }
       const res = await insightApi.patchSettings(body)
       setData(res.data)
@@ -63,6 +99,8 @@ export default function InsightSettingsPage() {
   const tldrDirty = data !== null && data.has_tldr_access && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
   const githubDirty = data !== null && data.has_tldr_access && githubToken !== ''
   const dirty = langDirty || tldrDirty || githubDirty
+
+  const modelList = isOwner ? allModels : (data?.tldr_allowed_models ?? [])
 
   return (
     <div className="space-y-3">
@@ -143,39 +181,90 @@ export default function InsightSettingsPage() {
             </div>
           </div>
 
-          {data?.has_tldr_access && data.tldr_allowed_models.length > 0 && (
+          {data?.has_tldr_access && (
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">
-                {t('insight.tldr_model_label', { defaultValue: 'LLM model' })}
-              </Label>
-              <Select value={tldrModel} onValueChange={setTldrModel}>
-                <SelectTrigger className="w-full font-mono text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {data.tldr_allowed_models.map((m) => (
-                    <SelectItem key={m} value={m} className="font-mono text-xs">{m}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-muted-foreground">
+                  {t('insight.tldr_model_label', { defaultValue: 'LLM model' })}
+                </Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0"
+                  disabled={loadingModels}
+                  onClick={loadModels}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${loadingModels ? 'animate-spin' : ''}`} />
+                </Button>
+              </div>
+              <Combobox<string>
+                items={modelList}
+                itemToStringLabel={(m: string) => m}
+                itemToStringValue={(m: string) => m}
+              >
+                <ComboboxInput
+                  value={tldrModel}
+                  placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select model...' })}
+                  className="font-mono text-xs"
+                />
+                <ComboboxContent>
+                  <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>
+                  <ComboboxList>
+                    {(item) => (
+                      <ComboboxItem
+                        key={item}
+                        value={item}
+                        onSelect={() => setTldrModel(item)}
+                        className="font-mono text-xs"
+                      >
+                        {item}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
             </div>
           )}
 
           {data?.has_tldr_access && (
             <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">
-                {t('insight.github_token_label', { defaultValue: 'GitHub token (optional)' })}
-              </Label>
-              <Input
-                type="password"
-                placeholder={data.github_token_set
-                  ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace saved one' })
-                  : t('insight.github_token_placeholder_empty', { defaultValue: 'ghp_...' })
-                }
-                value={githubToken}
-                onChange={(e) => setGithubToken(e.target.value)}
-                className="font-mono text-xs"
-              />
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">
+                  {t('insight.github_token_label', { defaultValue: 'GitHub token (optional)' })}
+                </Label>
+                {data.github_token_set && githubToken === '' && (
+                  <span className="text-xs text-green-500 font-medium">&#x2713; saved</span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  placeholder={data.github_token_set && githubToken === ''
+                    ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace' })
+                    : 'ghp_...'
+                  }
+                  value={githubToken === '__clear__' ? '' : githubToken}
+                  onChange={(e) => setGithubToken(e.target.value)}
+                  className="font-mono text-xs flex-1"
+                />
+                {data.github_token_set && githubToken === '' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-9 shrink-0"
+                    onClick={() => setGithubToken('__clear__')}
+                  >
+                    {t('common.clear', { defaultValue: 'Clear' })}
+                  </Button>
+                )}
+              </div>
+              {githubToken === '__clear__' && (
+                <p className="text-xs text-destructive">
+                  {t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 {t('insight.github_token_hint', { defaultValue: 'For private repos and to avoid GitHub rate limits.' })}
               </p>

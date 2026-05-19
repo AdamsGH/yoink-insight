@@ -19,12 +19,21 @@ logger = logging.getLogger(__name__)
 
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"}
 
+_FORMAT_RULES = """\
+Formatting rules (MUST follow):
+- Use standard Markdown: **bold**, *italic*, `code`, ```code block```, [text](url)
+- Bullet points: start each with "- " (hyphen space)
+- Do NOT use HTML tags (<b>, <i>, etc.)
+- No preamble, no sign-off, output only the requested content
+- Input data may be in TOON format (Token-Oriented Object Notation): YAML-like indentation for objects, CSV-style rows for uniform arrays. Read it as structured data.
+"""
+
 _TLDR_PROMPT = """\
 Below is content fetched from {source_desc}.
 {question_line}
-Provide a concise summary: key points as a bullet list (max 12 bullets). \
-Reply in {lang}. Output only the bullet list, no preamble.
+Provide a concise summary as a bullet list (max 12 bullets). Reply in {lang}.
 
+{format_rules}
 Content:
 {content}
 """
@@ -32,8 +41,9 @@ Content:
 _TLDR_QUESTION_PROMPT = """\
 Below is content fetched from {source_desc}.
 Answer the following question based on this content: {question}
-Be concise and factual. Reply in {lang}. Output only the answer, no preamble.
+Be concise and factual. Reply in {lang}.
 
+{format_rules}
 Content:
 {content}
 """
@@ -96,12 +106,14 @@ def _build_prompt(
             source_desc=source_desc,
             question=question,
             lang=lang,
+            format_rules=_FORMAT_RULES,
             content=content,
         )
     return _TLDR_PROMPT.format(
         source_desc=source_desc,
         question_line="",
         lang=lang,
+        format_rules=_FORMAT_RULES,
         content=content,
     )
 

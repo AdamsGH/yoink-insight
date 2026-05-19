@@ -13,6 +13,8 @@ dependencies = [
     "youtube-transcript-api>=1.0",
     "trafilatura>=2.0.0",
     "readability-lxml>=0.8.4",
+    "markdown-it-py>=4.0",
+    "toon_format @ git+https://github.com/toon-format/toon-python.git",
     "PyGithub>=2.9",
     "beautifulsoup4>=4.12",
 ]

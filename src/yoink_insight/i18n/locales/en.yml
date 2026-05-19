@@ -38,7 +38,7 @@ insight:
   summary_header: "📋 <b>Summary</b>"
 
 tldr:
-  header: "🔗 <b>Summary</b>"
+  header: "🔗 Summary"
   no_url: "Please provide a URL. Usage: /tldr <url> [question]"
   error:
     fetch_error: "Could not fetch the page. Check the URL and try again."
