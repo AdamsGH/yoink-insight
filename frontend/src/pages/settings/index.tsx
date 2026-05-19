@@ -339,17 +339,17 @@ export default function InsightSettingsPage() {
               {data?.has_access
                 ? <BrainCircuit className="h-4 w-4 shrink-0 text-primary" />
                 : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
-              {data?.has_access
-                ? t('insight.settings_access_active', { defaultValue: 'AI Summary' })
-                : t('insight.settings_no_access_title')}
+              {t('insight.settings_access_active', { defaultValue: 'AI Summary' })}
             </CardTitle>
           </CardHeader>
           <CardContent className="px-4 pb-2">
             <div className="divide-y divide-border">
               <div className="py-2">
                 <p className="text-xs text-muted-foreground">
-                  {data?.has_access && data.granted_at
-                    ? t('insight.settings_access_granted', { date: formatDate(data.granted_at) })
+                  {data?.has_access
+                    ? (data.granted_at
+                        ? t('insight.settings_access_granted', { date: formatDate(data.granted_at) })
+                        : t('insight.settings_access_active', { defaultValue: 'Access active' }))
                     : t('insight.settings_no_access_body')}
                 </p>
               </div>
@@ -396,39 +396,37 @@ export default function InsightSettingsPage() {
               </div>
 
               {data?.has_tldr_access && (
-                <div className="flex items-center justify-between gap-3 py-2">
-                  <div className="min-w-0 flex-1">
+                <div className="py-2 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
                     <p className="text-sm leading-snug">{t('insight.tldr_model_label', { defaultValue: 'LLM model' })}</p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
                     <Button
-                      type="button" variant="ghost" size="sm" className="h-7 w-7 p-0"
+                      type="button" variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0"
                       disabled={loadingModels} onClick={loadModels}
                     >
                       <RefreshCw className={`h-3.5 w-3.5 ${loadingModels ? 'animate-spin' : ''}`} />
                     </Button>
-                    <Combobox<string>
-                      items={modelList}
-                      itemToStringLabel={(m: string) => m}
-                      itemToStringValue={(m: string) => m}
-                    >
-                      <ComboboxInput
-                        value={tldrModel ?? data?.tldr_model ?? data?.tldr_allowed_models[0] ?? ''}
-                        placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select...' })}
-                        className="h-8 text-xs font-mono w-44"
-                      />
-                      <ComboboxContent>
-                        <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>
-                        <ComboboxList>
-                          {(item) => (
-                            <ComboboxItem key={item} value={item} onSelect={() => setTldrModel(item)} className="font-mono text-xs">
-                              {item}
-                            </ComboboxItem>
-                          )}
-                        </ComboboxList>
-                      </ComboboxContent>
-                    </Combobox>
                   </div>
+                  <Combobox<string>
+                    items={modelList}
+                    itemToStringLabel={(m: string) => m}
+                    itemToStringValue={(m: string) => m}
+                  >
+                    <ComboboxInput
+                      value={tldrModel ?? data?.tldr_model ?? data?.tldr_allowed_models[0] ?? ''}
+                      placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select...' })}
+                      className="h-8 text-xs font-mono w-full"
+                    />
+                    <ComboboxContent>
+                      <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>
+                      <ComboboxList>
+                        {(item) => (
+                          <ComboboxItem key={item} value={item} onSelect={() => setTldrModel(item)} className="font-mono text-xs">
+                            {item}
+                          </ComboboxItem>
+                        )}
+                      </ComboboxList>
+                    </ComboboxContent>
+                  </Combobox>
                 </div>
               )}
 
@@ -437,24 +435,27 @@ export default function InsightSettingsPage() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm leading-snug">{t('insight.github_token_label', { defaultValue: 'GitHub token' })}</p>
                     {data.github_token_set && githubToken === '' && (
-                      <span className="text-xs text-green-500 font-medium">&#x2713; saved</span>
+                      <span className="text-xs text-green-500 font-medium">&#x2713;</span>
                     )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="relative">
                     <Input
                       type="password"
                       placeholder={data.github_token_set && githubToken === ''
-                        ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace' })
+                        ? t('insight.github_token_placeholder_set', { defaultValue: 'New token to replace...' })
                         : 'ghp_...'}
                       value={githubToken === '__clear__' ? '' : githubToken}
                       onChange={(e) => setGithubToken(e.target.value)}
-                      className="h-8 font-mono text-xs flex-1"
+                      className="h-8 font-mono text-xs pr-8"
                     />
                     {data.github_token_set && githubToken === '' && (
-                      <Button type="button" variant="outline" size="sm" className="h-8 text-xs shrink-0"
-                        onClick={() => setGithubToken('__clear__')}>
-                        {t('common.clear', { defaultValue: 'Clear' })}
-                      </Button>
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
+                        onClick={() => setGithubToken('__clear__')}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     )}
                   </div>
                   {githubToken === '__clear__' && (
@@ -489,7 +490,7 @@ export default function InsightSettingsPage() {
                 </CardTitle>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button size="icon" className="h-7 w-7 shrink-0" onClick={() => { setEditAlias(undefined); setAliasDialogOpen(true) }}>
+                    <Button size="sm" variant="outline" className="h-7 w-7 p-0 shrink-0" onClick={() => { setEditAlias(undefined); setAliasDialogOpen(true) }}>
                       <Plus className="h-3.5 w-3.5" />
                     </Button>
                   </TooltipTrigger>
