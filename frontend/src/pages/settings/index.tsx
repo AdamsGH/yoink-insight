@@ -7,7 +7,7 @@ import { insightApi, type InsightSettings, type TldrAlias } from '@insight/api/i
 import { formatDate } from '@core/lib/utils'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle,
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogActions, DialogContent, DialogHeader, DialogTitle,
   Input, Label,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList,
@@ -185,12 +185,12 @@ function AliasDialog({
             />
           </div>
         </div>
-        <DialogFooter className="flex-row gap-2 sm:space-x-0">
+        <DialogActions>
           <Button variant="outline" className="flex-1" onClick={onClose}>{t('common.cancel')}</Button>
           <Button className="flex-1" onClick={handleSubmit} disabled={!canSave}>
             {saving ? t('common.loading') : t('common.save')}
           </Button>
-        </DialogFooter>
+        </DialogActions>
       </DialogContent>
     </Dialog>
   )
