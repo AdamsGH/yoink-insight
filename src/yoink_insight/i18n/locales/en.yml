@@ -1,7 +1,7 @@
 commands:
   - {command: about,          description: "Describe a YouTube video",    scope: default, required_feature: "insight:summary"}
   - {command: summary,        description: "Summarize a YouTube video",   scope: default, required_feature: "insight:summary"}
-  - {command: tldr,           description: "Summarize any URL",           scope: default, required_feature: "insight:tldr"}
+  - {command: tldr,           description: "Summarize any URL (+ max / nobullshit)", scope: default, required_feature: "insight:tldr"}
   - {command: insight_lang,   description: "Set Insight language",        scope: private, required_feature: "insight:summary"}
   - {command: insight_grant,  description: "Grant Insight access",        scope: private, min_role: admin}
   - {command: insight_revoke, description: "Revoke Insight access",       scope: private, min_role: admin}
@@ -13,7 +13,7 @@ help_sections:
     footer: "Commands are only visible when you have Insight access."
   tldr:
     title: "TLDR"
-    footer: "Summarise any URL or YouTube video. Requires separate TLDR access."
+    footer: "Summarise any URL or YouTube video. Requires separate TLDR access.\nModifiers: `max` - detailed breakdown; `nobullshit` - cut to the point, skip hype.\nCustom aliases available in AI settings."
   admin_insight:
     title: "Insight Admin"
 

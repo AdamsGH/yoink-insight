@@ -22,6 +22,13 @@ export interface GatewayModel {
   [key: string]: unknown
 }
 
+export interface TldrAlias {
+  id: number
+  alias: string
+  prompt: string
+  created_at: string
+}
+
 export const insightApi = {
   getSettings: () =>
     apiClient.get<InsightSettings>('/insight/settings/me'),
@@ -47,4 +54,16 @@ export const insightApi = {
       `/insight/config/test${qs ? `?${qs}` : ''}`
     )
   },
+
+  listAliases: () =>
+    apiClient.get<TldrAlias[]>('/insight/aliases'),
+
+  createAlias: (alias: string, prompt: string) =>
+    apiClient.post<TldrAlias>('/insight/aliases', { alias, prompt }),
+
+  updateAlias: (id: number, alias: string, prompt: string) =>
+    apiClient.patch<TldrAlias>(`/insight/aliases/${id}`, { alias, prompt }),
+
+  deleteAlias: (id: number) =>
+    apiClient.delete(`/insight/aliases/${id}`),
 }

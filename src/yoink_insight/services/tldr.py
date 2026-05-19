@@ -25,7 +25,7 @@ Formatting rules (MUST follow):
 - Bullet points: start each with "- " (hyphen space)
 - Do NOT use HTML tags (<b>, <i>, etc.)
 - No preamble, no sign-off, output only the requested content
-- Input data may be in TOON format (Token-Oriented Object Notation): YAML-like indentation for objects, CSV-style rows for uniform arrays. Read it as structured data.
+- Input data may be in TOON format (Token-Oriented Object Notation): YAML-like indentation for objects, CSV-style rows for uniform arrays. Read it as structured data, do NOT reproduce it verbatim in your output.
 """
 
 _TLDR_PROMPT = """\
@@ -47,6 +47,25 @@ Be concise and factual. Reply in {lang}.
 Content:
 {content}
 """
+
+# Built-in alias prompts
+_BUILTIN_ALIASES: dict[str, str] = {
+    "max": (
+        "Give a comprehensive, detailed breakdown of this content. Cover all key points, "
+        "technical details, examples, and nuances. Do not omit anything significant. "
+        "Use sections and bullet lists as appropriate."
+    ),
+    "nobullshit": (
+        "Cut straight to the point. Is this content worth reading? What is the single core idea? "
+        "List only the genuinely useful facts - skip hype, filler, and obvious statements. "
+        "If it's mostly noise, say so directly."
+    ),
+    "noshit": (
+        "Cut straight to the point. Is this content worth reading? What is the single core idea? "
+        "List only the genuinely useful facts - skip hype, filler, and obvious statements. "
+        "If it's mostly noise, say so directly."
+    ),
+}
 
 # Characters streamed before we send a draft update to Telegram
 _DRAFT_MIN_CHARS = 80
@@ -118,6 +137,18 @@ def _build_prompt(
     )
 
 
+def resolve_alias(question: str | None, user_aliases: dict[str, str] | None = None) -> str | None:
+    """If question matches a built-in or user alias, return the expanded prompt."""
+    if not question:
+        return None
+    key = question.strip().lower()
+    if key in _BUILTIN_ALIASES:
+        return _BUILTIN_ALIASES[key]
+    if user_aliases and key in user_aliases:
+        return user_aliases[key]
+    return question
+
+
 async def stream_tldr(
     url: str,
     lang: str,
@@ -125,6 +156,7 @@ async def stream_tldr(
     question: str | None = None,
     model: str | None = None,
     github_token: str | None = None,
+    user_aliases: dict[str, str] | None = None,
 ):
     """Fetch content and stream LLM summary chunks.
 
@@ -152,7 +184,8 @@ async def stream_tldr(
         source_desc = parsed.netloc + parsed.path
         logger.debug("Fetched %s via %s (%d chars)", url, result.via, len(content))
 
-    prompt = _build_prompt(content, source_desc, lang, question)
+    resolved_question = resolve_alias(question, user_aliases)
+    prompt = _build_prompt(content, source_desc, lang, resolved_question)
 
     endpoint = config.gateway_base_url.rstrip("/") + "/v1/chat/completions"
     headers: dict[str, str] = {"Content-Type": "application/json"}

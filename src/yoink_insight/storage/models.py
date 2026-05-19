@@ -66,6 +66,26 @@ class InsightSummaryCache(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class InsightTldrAlias(Base):
+    """User-defined /tldr aliases: keyword -> custom prompt injection."""
+    __tablename__ = "insight_tldr_aliases"
+    __table_args__ = (
+        Index("idx_insight_tldr_alias_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    alias: Mapped[str] = mapped_column(String(32), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+
+
 class InsightUsageLog(Base):
     """Tracks every /summary and /about invocation."""
     __tablename__ = "insight_usage_log"

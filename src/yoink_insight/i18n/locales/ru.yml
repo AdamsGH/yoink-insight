@@ -1,7 +1,7 @@
 commands:
   - {command: about,          description: "Описание YouTube видео",          scope: default}
   - {command: summary,        description: "Краткое содержание YouTube видео", scope: default}
-  - {command: tldr,           description: "Краткое содержание любой ссылки", scope: default}
+  - {command: tldr,           description: "Краткое содержание любой ссылки (+ max / nobullshit)", scope: default}
   - {command: insight_lang,   description: "Язык ответов Insight",            scope: private}
   - {command: insight_grant,  description: "Выдать доступ к Insight",         scope: private, min_role: admin}
   - {command: insight_revoke, description: "Отозвать доступ к Insight",       scope: private, min_role: admin}
@@ -13,7 +13,7 @@ help_sections:
     footer: "Команды видны только пользователям с доступом к Insight."
   tldr:
     title: "TLDR"
-    footer: "Краткое содержание любой ссылки или YouTube-видео. Требует отдельного доступа."
+    footer: "Краткое содержание любой ссылки или YouTube-видео. Требует отдельного доступа.\nМодификаторы: `max` - подробно и детально; `nobullshit` - только суть, без воды.\nСвои алиасы - в настройках AI."
   admin_insight:
     title: "Управление Insight"
 

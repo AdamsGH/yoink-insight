@@ -9,9 +9,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
+from sqlalchemy import select
+
 from yoink_insight.bot.middleware import get_effective_insight_config, get_insight_settings_repo, get_insight_usage_repo
-from yoink_insight.services.md_entities import md_to_entities
-from yoink_insight.services.tldr import TldrError, cache_key_for_url, stream_tldr
+from yoink_insight.services.md_entities import _utf16_len, md_to_entities
+from yoink_insight.services.tldr import TldrError, _BUILTIN_ALIASES, cache_key_for_url, stream_tldr
 
 logger = logging.getLogger(__name__)
 
@@ -66,16 +68,30 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_model = await settings.get_tldr_model(user_id)
     user_github_token = await settings.get_github_token(user_id)
 
+    # Load user aliases from DB
+    user_aliases: dict[str, str] = {}
+    session_factory = context.bot_data.get("session_factory")
+    if session_factory:
+        from yoink_insight.storage.models import InsightTldrAlias
+        async with session_factory() as session:
+            rows = (await session.execute(
+                select(InsightTldrAlias).where(InsightTldrAlias.user_id == user_id)
+            )).scalars().all()
+            user_aliases = {r.alias: r.prompt for r in rows}
+
+    # Determine if question is an alias (aliases don't bypass cache - they modify the default prompt)
+    is_alias = question is not None and question.strip().lower() in {**_BUILTIN_ALIASES, **user_aliases}
     cache_repo = context.bot_data.get("insight_summary_cache")
     ck = cache_key_for_url(url)
-    cached = await cache_repo.get(ck, lang, "tldr") if cache_repo else None
+    cache_cmd = f"tldr:{question.strip().lower()}" if is_alias else "tldr"
+    cached = await cache_repo.get(ck, lang, cache_cmd) if (cache_repo and (not question or is_alias)) else None
     if cached:
         header = t("tldr.header", lang)
         plain_body, body_entities = md_to_entities(cached)
         header_line = f"{header}\n\n"
-        offset_shift = len(header_line)
+        offset_shift = _utf16_len(header_line)
         final_entities = [
-            MessageEntity(type=MessageEntity.BOLD, offset=0, length=len(header)),
+            MessageEntity(type=MessageEntity.BOLD, offset=0, length=_utf16_len(header)),
         ] + [
             MessageEntity(type=e["type"], offset=e["offset"] + offset_shift,
                           length=e["length"], url=e.get("url"))
@@ -102,7 +118,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     last_sent_len = 0
 
     try:
-        async for chunk in stream_tldr(url, lang, config, question=question, model=user_model, github_token=user_github_token):
+        async for chunk in stream_tldr(url, lang, config, question=question, model=user_model, github_token=user_github_token, user_aliases=user_aliases):
             accumulated += chunk
             if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:
                 try:
@@ -136,10 +152,10 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Header is prepended as a bold entity on top.
     plain_body, body_entities = md_to_entities(body)
     header_line = f"{header}\n\n"
-    offset_shift = len(header_line)
+    offset_shift = _utf16_len(header_line)
     final_text = header_line + plain_body
     final_entities = [
-        MessageEntity(type=MessageEntity.BOLD, offset=0, length=len(header)),
+        MessageEntity(type=MessageEntity.BOLD, offset=0, length=_utf16_len(header)),
     ] + [
         MessageEntity(
             type=e["type"],
@@ -171,9 +187,10 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    if cache_repo:
+    cache_cmd = f"tldr:{question.strip().lower()}" if is_alias else "tldr"
+    if cache_repo and (not question or is_alias):
         try:
-            await cache_repo.set(ck, lang, "tldr", body)
+            await cache_repo.set(ck, lang, cache_cmd, body)
         except Exception as cache_err:
             logger.debug("Failed to cache tldr result: %s", cache_err)
 

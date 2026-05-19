@@ -57,3 +57,22 @@ class UserLookupResult(BaseModel):
     id: int
     username: str | None
     first_name: str | None
+
+
+class TldrAliasResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    alias: str
+    prompt: str
+    created_at: datetime
+
+
+class TldrAliasCreate(BaseModel):
+    alias: str
+    prompt: str
+
+
+class TldrAliasUpdate(BaseModel):
+    alias: str
+    prompt: str

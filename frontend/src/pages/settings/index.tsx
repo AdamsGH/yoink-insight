@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useGetIdentity } from '@refinedev/core'
-import { BrainCircuit, Link, LockKeyhole, RefreshCw } from 'lucide-react'
+import { BrainCircuit, Link, LockKeyhole, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 
-import { insightApi, type InsightSettings } from '@insight/api/insight'
+import { insightApi, type InsightSettings, type TldrAlias } from '@insight/api/insight'
 import { formatDate } from '@core/lib/utils'
 import {
-  Button, Card, CardContent, Input, Label,
+  Button, Card, CardContent, CardHeader, CardTitle,
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
+  Input, Label,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList,
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from '@ui'
 import { toast } from '@core/components/ui/toast'
 import type { User } from '@core/types/api'
@@ -17,6 +20,96 @@ const LANG_OPTIONS = [
   { value: 'en', label: 'English' },
   { value: 'ru', label: 'Русский' },
 ] as const
+
+const BUILTIN_ALIASES = ['max', 'nobullshit', 'noshit']
+
+// ---- Alias dialog ----
+
+function AliasDialog({
+  open,
+  initial,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  initial?: TldrAlias
+  onClose: () => void
+  onSubmit: (alias: string, prompt: string) => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const [alias, setAlias] = useState(initial?.alias ?? '')
+  const [prompt, setPrompt] = useState(initial?.prompt ?? '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (open) { setAlias(initial?.alias ?? ''); setPrompt(initial?.prompt ?? '') }
+  }, [open, initial])
+
+  const isBuiltin = BUILTIN_ALIASES.includes(alias.trim().toLowerCase())
+  const canSave = alias.trim().length > 0 && prompt.trim().length > 0 && !isBuiltin && !saving
+
+  const handleSubmit = async () => {
+    if (!canSave) return
+    setSaving(true)
+    try {
+      await onSubmit(alias.trim().toLowerCase(), prompt.trim())
+      onClose()
+    } catch {
+      // error handled by parent
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>
+            {initial
+              ? t('insight.alias_edit_title', { defaultValue: 'Edit alias' })
+              : t('insight.alias_add_title', { defaultValue: 'Add alias' })}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label>{t('insight.alias_field', { defaultValue: 'Alias' })}</Label>
+            <Input
+              placeholder="e.g. deep, brief, tech"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+              autoFocus={!initial}
+              className="font-mono text-xs"
+            />
+            {isBuiltin && (
+              <p className="text-xs text-destructive">
+                {t('insight.alias_builtin_conflict', { defaultValue: 'This is a built-in alias and cannot be overridden.' })}
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label>{t('insight.alias_prompt_field', { defaultValue: 'Prompt instruction' })}</Label>
+            <textarea
+              className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+              placeholder={t('insight.alias_prompt_placeholder', { defaultValue: 'e.g. Focus on technical details and code examples.' })}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+          </div>
+        </div>
+        <DialogFooter className="flex-row gap-2 sm:space-x-0">
+          <Button variant="outline" className="flex-1" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button className="flex-1" onClick={handleSubmit} disabled={!canSave}>
+            {saving ? t('common.loading') : t('common.save')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---- Main page ----
 
 export default function InsightSettingsPage() {
   const { t } = useTranslation()
@@ -32,6 +125,12 @@ export default function InsightSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
+  const [aliases, setAliases] = useState<TldrAlias[]>([])
+  const [loadingAliases, setLoadingAliases] = useState(false)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [aliasDialogOpen, setAliasDialogOpen] = useState(false)
+  const [editAlias, setEditAlias] = useState<TldrAlias | undefined>(undefined)
+
   const loadModels = async () => {
     setLoadingModels(true)
     try {
@@ -44,6 +143,14 @@ export default function InsightSettingsPage() {
     }
   }
 
+  const loadAliases = useCallback(() => {
+    setLoadingAliases(true)
+    insightApi.listAliases()
+      .then((res) => setAliases(res.data))
+      .catch(() => toast.error(t('common.load_error')))
+      .finally(() => setLoadingAliases(false))
+  }, [t])
+
   useEffect(() => {
     insightApi
       .getSettings()
@@ -53,12 +160,12 @@ export default function InsightSettingsPage() {
         setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
         setGithubToken('')
         if (res.data.has_tldr_access) {
-          // owner loads full list from gateway; regular user uses allowed_models from settings
           if (identity?.role === 'owner') {
             loadModels()
           } else {
             setAllModels(res.data.tldr_allowed_models)
           }
+          loadAliases()
         }
       })
       .catch(() => {})
@@ -91,6 +198,44 @@ export default function InsightSettingsPage() {
     }
   }
 
+  const handleCreateAlias = async (alias: string, prompt: string) => {
+    try {
+      await insightApi.createAlias(alias, prompt)
+      toast.success(t('common.saved'))
+      loadAliases()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      toast.error(detail ?? t('common.load_error'))
+      throw err
+    }
+  }
+
+  const handleUpdateAlias = async (alias: string, prompt: string) => {
+    if (!editAlias) return
+    try {
+      await insightApi.updateAlias(editAlias.id, alias, prompt)
+      toast.success(t('common.saved'))
+      loadAliases()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      toast.error(detail ?? t('common.load_error'))
+      throw err
+    }
+  }
+
+  const handleDeleteAlias = async (a: TldrAlias) => {
+    setDeletingId(a.id)
+    try {
+      await insightApi.deleteAlias(a.id)
+      toast.success(t('common.deleted', { defaultValue: 'Deleted' }))
+      loadAliases()
+    } catch {
+      toast.error(t('common.load_error'))
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div>
   }
@@ -103,187 +248,265 @@ export default function InsightSettingsPage() {
   const modelList = isOwner ? allModels : (data?.tldr_allowed_models ?? [])
 
   return (
-    <div className="space-y-3">
-      {/* AI Summary access */}
-      <Card>
-        <CardContent className="pt-4 pb-4">
-          {data?.has_access ? (
+    <TooltipProvider delayDuration={300}>
+      <div className="space-y-3">
+        {/* AI Summary access */}
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            {data?.has_access ? (
+              <div className="flex items-center gap-3">
+                <BrainCircuit className="h-5 w-5 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium leading-none">
+                    {t('insight.settings_access_active', { defaultValue: 'Access active' })}
+                  </p>
+                  {data.granted_at && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t('insight.settings_access_granted', { date: formatDate(data.granted_at) })}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium leading-none">{t('insight.settings_no_access_title')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{t('insight.settings_no_access_body')}</p>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Language */}
+        <Card>
+          <CardContent className="pt-4 space-y-4">
+            <div>
+              <p className="text-sm font-medium">{t('insight.settings_lang_title')}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{t('insight.settings_lang_hint')}</p>
+            </div>
+            {data?.has_access ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">{t('insight.settings_lang_label')}</Label>
+                <Select value={lang} onValueChange={setLang}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LANG_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">{t('insight.settings_no_access_body')}</p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* TL;DR */}
+        <Card>
+          <CardContent className="pt-4 pb-4 space-y-4">
             <div className="flex items-center gap-3">
-              <BrainCircuit className="h-5 w-5 shrink-0 text-primary" />
+              {data?.has_tldr_access ? (
+                <Link className="h-5 w-5 shrink-0 text-primary" />
+              ) : (
+                <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" />
+              )}
               <div className="min-w-0">
                 <p className="text-sm font-medium leading-none">
-                  {t('insight.settings_access_active', { defaultValue: 'Access active' })}
+                  {t('insight.tldr_title', { defaultValue: 'TL;DR' })}
                 </p>
-                {data.granted_at && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t('insight.settings_access_granted', { date: formatDate(data.granted_at) })}
-                  </p>
-                )}
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {data?.has_tldr_access
+                    ? t('insight.tldr_access_active', { defaultValue: 'Access active - summarise any URL with /tldr' })
+                    : t('insight.tldr_no_access', { defaultValue: 'No TL;DR access. Ask an admin.' })}
+                </p>
               </div>
             </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium leading-none">{t('insight.settings_no_access_title')}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{t('insight.settings_no_access_body')}</p>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      {/* Language */}
-      <Card>
-        <CardContent className="pt-4 space-y-4">
-          <div>
-            <p className="text-sm font-medium">{t('insight.settings_lang_title')}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{t('insight.settings_lang_hint')}</p>
-          </div>
-          {data?.has_access ? (
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">{t('insight.settings_lang_label')}</Label>
-              <Select value={lang} onValueChange={setLang}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {LANG_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">{t('insight.settings_no_access_body')}</p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* TL;DR */}
-      <Card>
-        <CardContent className="pt-4 pb-4 space-y-4">
-          <div className="flex items-center gap-3">
-            {data?.has_tldr_access ? (
-              <Link className="h-5 w-5 shrink-0 text-primary" />
-            ) : (
-              <LockKeyhole className="h-5 w-5 shrink-0 text-muted-foreground" />
-            )}
-            <div className="min-w-0">
-              <p className="text-sm font-medium leading-none">
-                {t('insight.tldr_title', { defaultValue: 'TL;DR' })}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {data?.has_tldr_access
-                  ? t('insight.tldr_access_active', { defaultValue: 'Access active - summarise any URL with /tldr' })
-                  : t('insight.tldr_no_access', { defaultValue: 'No TL;DR access. Ask an admin.' })}
-              </p>
-            </div>
-          </div>
-
-          {data?.has_tldr_access && (
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label className="text-xs text-muted-foreground">
-                  {t('insight.tldr_model_label', { defaultValue: 'LLM model' })}
-                </Label>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 w-6 p-0"
-                  disabled={loadingModels}
-                  onClick={loadModels}
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${loadingModels ? 'animate-spin' : ''}`} />
-                </Button>
-              </div>
-              <Combobox<string>
-                items={modelList}
-                itemToStringLabel={(m: string) => m}
-                itemToStringValue={(m: string) => m}
-              >
-                <ComboboxInput
-                  value={tldrModel}
-                  placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select model...' })}
-                  className="font-mono text-xs"
-                />
-                <ComboboxContent>
-                  <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>
-                  <ComboboxList>
-                    {(item) => (
-                      <ComboboxItem
-                        key={item}
-                        value={item}
-                        onSelect={() => setTldrModel(item)}
-                        className="font-mono text-xs"
-                      >
-                        {item}
-                      </ComboboxItem>
-                    )}
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-            </div>
-          )}
-
-          {data?.has_tldr_access && (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <Label className="text-xs text-muted-foreground">
-                  {t('insight.github_token_label', { defaultValue: 'GitHub token (optional)' })}
-                </Label>
-                {data.github_token_set && githubToken === '' && (
-                  <span className="text-xs text-green-500 font-medium">&#x2713; saved</span>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  type="password"
-                  placeholder={data.github_token_set && githubToken === ''
-                    ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace' })
-                    : 'ghp_...'
-                  }
-                  value={githubToken === '__clear__' ? '' : githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  className="font-mono text-xs flex-1"
-                />
-                {data.github_token_set && githubToken === '' && (
+            {data?.has_tldr_access && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">
+                    {t('insight.tldr_model_label', { defaultValue: 'LLM model' })}
+                  </Label>
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    className="text-xs h-9 shrink-0"
-                    onClick={() => setGithubToken('__clear__')}
+                    className="h-6 w-6 p-0"
+                    disabled={loadingModels}
+                    onClick={loadModels}
                   >
-                    {t('common.clear', { defaultValue: 'Clear' })}
+                    <RefreshCw className={`h-3.5 w-3.5 ${loadingModels ? 'animate-spin' : ''}`} />
                   </Button>
-                )}
+                </div>
+                <Combobox<string>
+                  items={modelList}
+                  itemToStringLabel={(m: string) => m}
+                  itemToStringValue={(m: string) => m}
+                >
+                  <ComboboxInput
+                    value={tldrModel}
+                    placeholder={t('insight.tldr_model_placeholder', { defaultValue: 'Select model...' })}
+                    className="font-mono text-xs"
+                  />
+                  <ComboboxContent>
+                    <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>
+                    <ComboboxList>
+                      {(item) => (
+                        <ComboboxItem
+                          key={item}
+                          value={item}
+                          onSelect={() => setTldrModel(item)}
+                          className="font-mono text-xs"
+                        >
+                          {item}
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
               </div>
-              {githubToken === '__clear__' && (
-                <p className="text-xs text-destructive">
-                  {t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                {t('insight.github_token_hint', { defaultValue: 'For private repos and to avoid GitHub rate limits.' })}
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
 
-      {/* Save */}
-      {(data?.has_access || data?.has_tldr_access) && (
-        <Button
-          onClick={save}
-          disabled={saving || !dirty}
-          size="sm"
-          className="w-full"
-        >
-          {saving ? t('common.saving') : t('common.save')}
-        </Button>
-      )}
-    </div>
+            {data?.has_tldr_access && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground">
+                    {t('insight.github_token_label', { defaultValue: 'GitHub token (optional)' })}
+                  </Label>
+                  {data.github_token_set && githubToken === '' && (
+                    <span className="text-xs text-green-500 font-medium">&#x2713; saved</span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder={data.github_token_set && githubToken === ''
+                      ? t('insight.github_token_placeholder_set', { defaultValue: 'Enter new token to replace' })
+                      : 'ghp_...'
+                    }
+                    value={githubToken === '__clear__' ? '' : githubToken}
+                    onChange={(e) => setGithubToken(e.target.value)}
+                    className="font-mono text-xs flex-1"
+                  />
+                  {data.github_token_set && githubToken === '' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-9 shrink-0"
+                      onClick={() => setGithubToken('__clear__')}
+                    >
+                      {t('common.clear', { defaultValue: 'Clear' })}
+                    </Button>
+                  )}
+                </div>
+                {githubToken === '__clear__' && (
+                  <p className="text-xs text-destructive">
+                    {t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {t('insight.github_token_hint', { defaultValue: 'For private repos and to avoid GitHub rate limits.' })}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Save */}
+        {(data?.has_access || data?.has_tldr_access) && (
+          <Button
+            onClick={save}
+            disabled={saving || !dirty}
+            size="sm"
+            className="w-full"
+          >
+            {saving ? t('common.saving') : t('common.save')}
+          </Button>
+        )}
+
+        {/* Aliases */}
+        {data?.has_tldr_access && (
+          <Card>
+            <CardHeader className="px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-sm font-medium">
+                  {t('insight.aliases_title', { defaultValue: '/tldr aliases' })}
+                </CardTitle>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button size="icon" className="h-7 w-7 shrink-0" onClick={() => { setEditAlias(undefined); setAliasDialogOpen(true) }}>
+                      <Plus className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{t('insight.alias_add_title', { defaultValue: 'Add alias' })}</TooltipContent>
+                </Tooltip>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {t('insight.aliases_hint', { defaultValue: 'Use /tldr <url> <alias> to apply. Built-in: max, nobullshit.' })}
+              </p>
+            </CardHeader>
+            <CardContent className="p-0 pb-2">
+              {loadingAliases ? (
+                <div className="px-4 py-3 text-xs text-muted-foreground">{t('common.loading')}</div>
+              ) : aliases.length === 0 ? (
+                <div className="px-4 py-4 text-center text-xs text-muted-foreground">
+                  {t('insight.aliases_empty', { defaultValue: 'No custom aliases yet.' })}
+                </div>
+              ) : (
+                <div className="divide-y divide-border">
+                  {aliases.map((a) => (
+                    <div key={a.id} className="flex items-start gap-3 px-4 py-3">
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <p className="font-mono text-sm font-medium">{a.alias}</p>
+                        <p className="text-xs text-muted-foreground line-clamp-2">{a.prompt}</p>
+                        <p className="text-xs text-muted-foreground/60">{formatDate(a.created_at)}</p>
+                      </div>
+                      <div className="flex gap-1 shrink-0 pt-0.5">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditAlias(a); setAliasDialogOpen(true) }}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('common.edit')}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              disabled={deletingId === a.id}
+                              onClick={() => handleDeleteAlias(a)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('common.delete')}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <AliasDialog
+          open={aliasDialogOpen}
+          initial={editAlias}
+          onClose={() => { setAliasDialogOpen(false); setEditAlias(undefined) }}
+          onSubmit={editAlias ? handleUpdateAlias : handleCreateAlias}
+        />
+      </div>
+    </TooltipProvider>
   )
 }

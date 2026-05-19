@@ -19,12 +19,15 @@ from yoink_insight.api.schemas import (
     InsightAccessResponse,
     InsightSettingsUpdate,
     InsightUserSettingsResponse,
+    TldrAliasCreate,
+    TldrAliasResponse,
+    TldrAliasUpdate,
     TldrConfigResponse,
     TldrConfigUpdate,
     UserLookupResult,
 )
 from yoink_insight.config import InsightConfig
-from yoink_insight.storage.models import InsightAccess, InsightUsageLog, InsightUserSettings
+from yoink_insight.storage.models import InsightAccess, InsightTldrAlias, InsightUsageLog, InsightUserSettings
 
 router = APIRouter(tags=["insight"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
@@ -503,3 +506,90 @@ async def _fetch_gateway_models(gw_url: str, gw_key: str, config: InsightConfig)
     except Exception:
         pass
     return [{"id": config.tldr_llm_model}]
+
+
+# --- User TLDR aliases ---
+
+_MAX_ALIASES_PER_USER = 20
+
+
+@router.get("/aliases", response_model=list[TldrAliasResponse], summary="List my /tldr aliases")
+async def list_my_aliases(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[TldrAliasResponse]:
+    if not await _has_feature_access(session, current_user, "tldr"):
+        raise HTTPException(status_code=403, detail="No TLDR access.")
+    rows = (await session.execute(
+        select(InsightTldrAlias)
+        .where(InsightTldrAlias.user_id == current_user.id)
+        .order_by(InsightTldrAlias.created_at)
+    )).scalars().all()
+    return list(rows)
+
+
+@router.post("/aliases", response_model=TldrAliasResponse, status_code=201, summary="Create /tldr alias")
+async def create_alias(
+    body: TldrAliasCreate,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TldrAliasResponse:
+    if not await _has_feature_access(session, current_user, "tldr"):
+        raise HTTPException(status_code=403, detail="No TLDR access.")
+    alias = body.alias.strip().lower()
+    if not alias:
+        raise HTTPException(status_code=400, detail="alias must not be empty.")
+    if alias in ("max", "nobullshit", "noshit"):
+        raise HTTPException(status_code=400, detail=f"'{alias}' is a built-in alias and cannot be overridden.")
+    count = (await session.execute(
+        select(InsightTldrAlias).where(InsightTldrAlias.user_id == current_user.id)
+    )).scalars().all()
+    if len(count) >= _MAX_ALIASES_PER_USER:
+        raise HTTPException(status_code=400, detail=f"Maximum {_MAX_ALIASES_PER_USER} aliases per user.")
+    # Check duplicate
+    existing = (await session.execute(
+        select(InsightTldrAlias).where(
+            InsightTldrAlias.user_id == current_user.id,
+            InsightTldrAlias.alias == alias,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Alias '{alias}' already exists.")
+    row = InsightTldrAlias(user_id=current_user.id, alias=alias, prompt=body.prompt.strip())
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+@router.patch("/aliases/{alias_id}", response_model=TldrAliasResponse, summary="Update /tldr alias")
+async def update_alias(
+    alias_id: int,
+    body: TldrAliasUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TldrAliasResponse:
+    row = await session.get(InsightTldrAlias, alias_id)
+    if row is None or row.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Alias not found.")
+    alias = body.alias.strip().lower()
+    if alias in ("max", "nobullshit", "noshit"):
+        raise HTTPException(status_code=400, detail=f"'{alias}' is a built-in alias.")
+    row.alias = alias
+    row.prompt = body.prompt.strip()
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+@router.delete("/aliases/{alias_id}", status_code=204, summary="Delete /tldr alias")
+async def delete_alias(
+    alias_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    row = await session.get(InsightTldrAlias, alias_id)
+    if row is None or row.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Alias not found.")
+    await session.delete(row)
+    await session.commit()
