@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from yoink.core.db.base import Base, _now
@@ -25,6 +25,29 @@ class InsightUserSettings(Base):
     lang: Mapped[str] = mapped_column(String(8), default="en", nullable=False)
     tldr_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     github_token: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    use_search: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class InsightUserPrompt(Base):
+    """Per-user prompt override for a specific command.
+
+    command is one of 'summary' | 'about' | 'tldr' (the default no-alias path).
+    The presence of a row means "use this prompt instead of the built-in one";
+    a missing row falls back to the hard-coded default. NULL/empty prompt is
+    treated the same as a missing row by the CRUD layer.
+    """
+    __tablename__ = "insight_user_prompts"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    command: Mapped[str] = mapped_column(String(16), primary_key=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
 
 
 class InsightAccess(Base):
@@ -67,7 +90,14 @@ class InsightSummaryCache(Base):
 
 
 class InsightTldrAlias(Base):
-    """User-defined /tldr aliases: keyword -> custom prompt injection."""
+    """User-defined /tldr aliases and domain bindings.
+
+    Three row shapes are valid (CHECK constraint enforces at least one):
+      1. Custom alias:           aliases='...', prompt='...', domains=NULL|csv, target_alias=NULL
+      2. Built-in domain bind:   target_alias='nobullshit', domains='csv', aliases=NULL, prompt=NULL
+      3. Custom + domains:       any combination, as long as a resolvable
+                                 prompt source exists (custom prompt or built-in target).
+    """
     __tablename__ = "insight_tldr_aliases"
     __table_args__ = (
         Index("idx_insight_tldr_alias_user", "user_id"),
@@ -79,8 +109,10 @@ class InsightTldrAlias(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    aliases: Mapped[str] = mapped_column(String(256), nullable=False)
-    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    aliases: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    domains: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    target_alias: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )
@@ -99,7 +131,7 @@ class InsightUsageLog(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    command: Mapped[str] = mapped_column(String(16), nullable=False)  # "summary" | "about"
+    command: Mapped[str] = mapped_column(String(16), nullable=False)  # "summary" | "about" | "tldr" | "tldr:<alias>"
     video_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     lang: Mapped[str] = mapped_column(String(8), nullable=False, default="en")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok")  # "ok" | "error"
@@ -107,3 +139,7 @@ class InsightUsageLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, nullable=False
     )
+    # TLDR metrics (NULL for non-tldr rows and legacy entries)
+    content_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    video_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    alias_key: Mapped[str | None] = mapped_column(String(64), nullable=True)

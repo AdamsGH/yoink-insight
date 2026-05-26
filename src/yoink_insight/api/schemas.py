@@ -28,15 +28,22 @@ class InsightSettingsUpdate(BaseModel):
     lang: str
     tldr_model: str | None = None
     github_token: str | None = None
+    use_search: bool | None = None
+    prompts: dict[str, str | None] | None = None
 
 
 class InsightUserSettingsResponse(BaseModel):
     lang: str
     has_gemini_access: bool
     has_tldr_access: bool = False
+    has_search_access: bool = False
     tldr_model: str | None = None
     tldr_allowed_models: list[str] = []
     github_token_set: bool = False
+    use_search: bool = False
+    prompts: dict[str, str] = {}
+    prompt_defaults: dict[str, str] = {}
+    alias_defaults: dict[str, str] = {}
 
 
 class TldrConfigResponse(BaseModel):
@@ -63,16 +70,22 @@ class TldrAliasResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    aliases: str
-    prompt: str
+    aliases: str | None = None
+    prompt: str | None = None
+    domains: str | None = None
+    target_alias: str | None = None
     created_at: datetime
 
 
 class TldrAliasCreate(BaseModel):
-    aliases: str
-    prompt: str
+    aliases: str | None = None
+    prompt: str | None = None
+    domains: str | None = None
+    target_alias: str | None = None
 
 
 class TldrAliasUpdate(BaseModel):
-    aliases: str
-    prompt: str
+    aliases: str | None = None
+    prompt: str | None = None
+    domains: str | None = None
+    target_alias: str | None = None
