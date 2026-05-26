@@ -24,7 +24,7 @@ const LANG_OPTIONS = [
   { value: 'ru', label: 'Русский' },
 ] as const
 
-const BUILTIN_ALIASES = ['max', 'nobullshit', 'noshit']
+const BUILTIN_ALIASES = ['max', 'nobullshit', 'noshit', 'tale']
 
 interface BuiltinAliasDef {
   aliases: string[]
@@ -34,7 +34,8 @@ interface BuiltinAliasDef {
 
 const BUILTIN_ALIAS_DEFS: BuiltinAliasDef[] = [
   { aliases: ['max'], target: 'max', desc: 'Thorough breakdown: all key points, technical details, bold headings.' },
-  { aliases: ['nobullshit', 'noshit'], target: 'nobullshit', desc: 'Cynical critic: one-line verdict, max 7 concrete bullets, calls out hype.' },
+  { aliases: ['nobullshit', 'noshit'], target: 'nobullshit', desc: 'Gruff but fair dwarf-critic. One-line verdict, calls out hype, names solid craft when it sees it.' },
+  { aliases: ['tale'], target: 'tale', desc: 'Connected prose from a dwarf storyteller. 2-4 paragraphs, no lists, no verdict.' },
 ]
 
 // ---- Tag input ----

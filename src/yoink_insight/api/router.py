@@ -761,7 +761,7 @@ async def _fetch_gateway_models(gw_url: str, gw_key: str, config: InsightConfig)
 _MAX_ALIASES_PER_USER = 20
 
 
-_BUILTIN_ALIAS_NAMES = {"max", "nobullshit", "noshit"}
+_BUILTIN_ALIAS_NAMES = {"max", "nobullshit", "noshit", "tale"}
 
 
 def _row_to_response(row: InsightTldrAlias) -> TldrAliasResponse:

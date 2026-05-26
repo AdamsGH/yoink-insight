@@ -59,6 +59,11 @@ _TLDR_BODY = """\
 Below is content fetched from {source_desc}.
 
 {format_rules}
+LANGUAGE (HARD REQUIREMENT): Reply in {lang}. Translate everything you
+produce into {lang}, even if the source content below is in another
+language. Keep proper nouns, code, URLs, version numbers, and error
+tokens verbatim, but every other word you write MUST be in {lang}.
+
 Content:
 {content}
 """
@@ -66,36 +71,65 @@ Content:
 _TLDR_QUESTION_BODY = """\
 Below is content fetched from {source_desc}.
 Answer the following question based on this content: {question}
-Be direct and specific. Reply in {lang}.
+Be direct and specific.
 
 {format_rules}
+LANGUAGE (HARD REQUIREMENT): Reply in {lang}. Translate everything you
+produce into {lang}, even if the source content below is in another
+language. Keep proper nouns, code, URLs, version numbers, and error
+tokens verbatim, but every other word you write MUST be in {lang}.
+
 Content:
 {content}
 """
 
 # Built-in alias prompts
+_NOBULLSHIT_PROMPT = (
+    "You are a gruff but fair dwarf-critic. You don't soften verdicts, but "
+    "you respect solid craft and you'll say when something is well-built. "
+    "Bullshit, hype, padding, and obvious filler get called out plainly. "
+    "Quality and clean work get acknowledged with the same directness.\n"
+    "\n"
+    "Open with a one-line verdict: is this worth reading, and why - one "
+    "concrete reason, not vague vibes. Then deliver the substance in "
+    "whatever shape fits the material: a short paragraph or two when the "
+    "piece has a single thread to summarise, a tight list of points when "
+    "the material is genuinely enumerable. Don't force bullets onto prose, "
+    "and don't force prose onto a checklist.\n"
+    "\n"
+    "Cover the actual content - claims, decisions, results, code, numbers. "
+    "Skip recapping structure or the author's intentions ('the post "
+    "explains...'). If something is genuinely well-done, name it; if "
+    "something is hype or filler, name that too. Same voice for both.\n"
+    "\n"
+    "Reply in {lang}."
+)
+
 _BUILTIN_ALIASES: dict[str, str] = {
     "max": (
         "Give a thorough, well-structured breakdown of this content. "
         "Cover all significant points, technical details, examples, and nuances in depth. "
         "Do not omit anything meaningful. Use sections with bold headings and bullet lists."
     ),
-    "nobullshit": (
-        "You are a cynical, no-nonsense critic. Be blunt and direct - do not soften your verdict. "
-        "Start with a one-line verdict: is this worth reading, or is it a waste of time? Be specific. "
-        "Then list ONLY the genuinely new or useful facts - maximum 7 bullets, each one a concrete claim. "
-        "If a bullet would not survive the question 'so what?' - cut it. "
-        "Call out hype, padding, and obvious statements explicitly if they dominate the content. "
-        "Do NOT summarise structure or intentions ('the author explains...') - summarise actual content. "
-        "Reply in {lang}."
-    ),
-    "noshit": (
-        "You are a cynical, no-nonsense critic. Be blunt and direct - do not soften your verdict. "
-        "Start with a one-line verdict: is this worth reading, or is it a waste of time? Be specific. "
-        "Then list ONLY the genuinely new or useful facts - maximum 7 bullets, each one a concrete claim. "
-        "If a bullet would not survive the question 'so what?' - cut it. "
-        "Call out hype, padding, and obvious statements explicitly if they dominate the content. "
-        "Do NOT summarise structure or intentions ('the author explains...') - summarise actual content. "
+    "nobullshit": _NOBULLSHIT_PROMPT,
+    "noshit": _NOBULLSHIT_PROMPT,
+    "tale": (
+        "You are a dwarf storyteller recounting what someone else made or "
+        "wrote. Voice: experienced, proud of solid work, comfortable with "
+        "craft metaphors drawn from forges, mines, stonework - but only "
+        "when one actually fits the material. No theatrical 'by my beard' "
+        "flourishes, no Tolkien cosplay, no fake archaic syntax.\n"
+        "\n"
+        "Retell the content as connected prose: two to four short "
+        "paragraphs that flow. NO bullet lists. NO headings. NO verdict, "
+        "no rating, no 'worth reading?' framing - just the story of what's "
+        "there. Preserve concrete facts: names, versions, numbers, code "
+        "identifiers, error tokens stay verbatim.\n"
+        "\n"
+        "Lead with the heart of the piece. Then the context or the "
+        "reasoning. End where the source ends - no manufactured wrap-up. "
+        "If a metaphor doesn't naturally land, don't reach for one.\n"
+        "\n"
         "Reply in {lang}."
     ),
 }
@@ -104,6 +138,7 @@ _BUILTIN_ALIASES: dict[str, str] = {
 _BUILTIN_ALIAS_HEADER_KEY: dict[str, str] = {
     "nobullshit": "tldr.header_nobullshit",
     "noshit": "tldr.header_nobullshit",
+    "tale": "tldr.header_tale",
 }
 
 # Characters streamed before we send a draft update to Telegram
@@ -194,6 +229,7 @@ def _build_prompt(
     body = _TLDR_BODY.format(
         source_desc=source_desc,
         format_rules=_FORMAT_RULES,
+        lang=lang,
         content=content,
     )
     return instruction + "\n" + body

@@ -1,7 +1,6 @@
 """/tldr <url> [question] - fetch and summarise any URL via gateway LLM."""
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from telegram import Message, MessageEntity, Update
@@ -13,17 +12,9 @@ from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
 from sqlalchemy import select
 
-from yoink_insight.bot.middleware import (
-    get_effective_insight_config,
-    get_insight_byok_repo,
-    get_insight_prompts_repo,
-    get_insight_settings_repo,
-    get_insight_usage_repo,
-    is_byok_enabled,
-)
+from yoink_insight.bot.middleware import get_effective_insight_config, get_insight_settings_repo, get_insight_usage_repo
 from yoink_insight.services.md_entities import _utf16_len, md_to_entities
 from yoink_insight.services.tldr import (
-    ByokRoute,
     TldrError,
     UserAliasEntry,
     _BUILTIN_ALIASES,
@@ -38,18 +29,14 @@ from yoink_insight.services.tldr import (
 
 logger = logging.getLogger(__name__)
 
-# Show "Thinking..." only after this many seconds without any visible progress.
-# If the LLM starts streaming before that, the placeholder never appears.
-_THINKING_DELAY = 8.0
-
 # Send a draft update each time the buffered output grows by at least this many
 # characters since the last push.
 _DRAFT_MIN_CHARS = 80
 
 
 def _draft_id_for(msg: Message) -> int:
-    """Stable per-chat draft id. We reuse the user's message id, which is unique
-    within the chat and stable for the lifetime of the request."""
+    """Stable per-chat draft id. We reuse the user's message id, which is
+    unique within the chat and stable for the lifetime of the request."""
     return msg.message_id
 
 
@@ -75,41 +62,10 @@ async def _load_user_alias_entries(context: ContextTypes.DEFAULT_TYPE, user_id: 
     return out
 
 
-async def _resolve_tldr_access(
-    context: ContextTypes.DEFAULT_TYPE, user_id: int
-) -> tuple[bool, ByokRoute | None]:
-    """Decide whether the user may run /tldr and which path to take.
-
-    Returns (allowed, byok_route). byok_route is non-None when the user has
-    no insight:tldr grant but the admin enabled BYOK and the user has saved a
-    valid (probed-OK) config. Owners can always use the gateway path.
-    """
-    perm_repo = context.bot_data.get("perm_repo")
-    user_repo = context.bot_data.get("user_repo")
-    user = await user_repo.get_or_create(user_id) if user_repo is not None else None
-    has_feature = False
-    if perm_repo is not None:
-        has_feature = await perm_repo.has(user_id, "insight", "tldr", user=user)
-    if has_feature:
-        return True, None
-
-    if not await is_byok_enabled(context):
-        return False, None
-
-    byok_repo = get_insight_byok_repo(context)
-    row = await byok_repo.get(user_id)
-    if row is None or not row.api_key or not row.model or row.tested_at is None:
-        return False, None
-    return True, ByokRoute(
-        provider=row.provider,
-        base_url=row.base_url,
-        api_key=row.api_key,
-        model=row.model,
-    )
-
-
 @require_access(AccessPolicy(
     min_role=UserRole.user,
+    plugin="insight",
+    feature="tldr",
     scopes=["all"],
     silent_deny=False,
     group_silent_deny=True,
@@ -122,11 +78,6 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = get_insight_settings_repo(context)
     config = await get_effective_insight_config(context)
     lang = await settings.get_lang(user_id, default=config.insight_default_lang)
-
-    allowed, byok_route = await _resolve_tldr_access(context, user_id)
-    if not allowed:
-        await update.message.reply_html(t("tldr.no_access", lang))
-        return
 
     args = context.args or []
     if not args:
@@ -152,9 +103,6 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     user_model = await settings.get_tldr_model(user_id)
     user_github_token = await settings.get_github_token(user_id)
-    use_search = await settings.get_use_search(user_id)
-    prompts_repo = get_insight_prompts_repo(context)
-    user_tldr_prompt = await prompts_repo.get(user_id, "tldr")
 
     entries = await _load_user_alias_entries(context, user_id)
 
@@ -192,6 +140,12 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             MessageEntity(type=MessageEntity.TEXT_LINK, offset=0, length=header_len_u16, url=url),
         ]
 
+    bot = context.bot
+    chat_id = update.message.chat_id
+    thread_id = getattr(update.message, "message_thread_id", None)
+    draft_id = _draft_id_for(update.message)
+    reply_to = update.message.message_id
+
     if cached:
         plain_body, body_entities = md_to_entities(cached)
         header_line = f"{header}\n\n"
@@ -211,46 +165,34 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await usage_repo.log(user_id, "tldr", lang=lang, status="cached", alias_key=alias_key)
         return
 
-    bot = context.bot
-    chat_id = update.message.chat_id
-    thread_id = getattr(update.message, "message_thread_id", None)
-    draft_id = _draft_id_for(update.message)
-    reply_to = update.message.message_id
-
-    # Optional "Thinking..." placeholder, posted only if the LLM keeps quiet
-    # past _THINKING_DELAY. We track it via a single mutable reference so
-    # nested coroutines and finally-blocks can see the latest state.
-    thinking_msg: Message | None = None
-    thinking_failed = False
-
-    async def _post_thinking() -> None:
-        nonlocal thinking_msg, thinking_failed
-        await asyncio.sleep(_THINKING_DELAY)
-        try:
-            thinking_msg = await update.message.reply_html(t("insight.thinking", lang))
-        except Exception as exc:
-            thinking_failed = True
-            logger.debug("Posting thinking placeholder failed: %s", exc)
-
-    thinking_task = asyncio.create_task(_post_thinking())
-
-    async def _cleanup_thinking() -> None:
-        """Cancel the pending placeholder or remove the live one. Safe to call
-        multiple times."""
-        if not thinking_task.done():
-            thinking_task.cancel()
-            try:
-                await thinking_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        if thinking_msg is not None:
-            try:
-                await thinking_msg.delete()
-            except Exception:
-                pass
+    # Start the draft immediately with empty text - Telegram renders an
+    # animated "Thinking..." placeholder until the first real chunk lands,
+    # then animates it into the streamed text in-place. The placeholder and
+    # the streamed body share the same draft id, so nothing jumps in the
+    # chat.
+    #
+    # PTB's client-side validator refuses text="" even though Bot API 10.0
+    # explicitly allows it for sendMessageDraft ("Pass an empty text to
+    # show a Thinking... placeholder"). We bypass the validator by going
+    # through api_kwargs: send_message_draft with a single space as text
+    # plus api_kwargs={"text": ""} - the api_kwargs payload wins on the
+    # final JSON serialisation.
+    draft_active = False
+    try:
+        await bot.send_message_draft(
+            chat_id=chat_id,
+            draft_id=draft_id,
+            text=" ",
+            message_thread_id=thread_id,
+            api_kwargs={"text": ""},
+        )
+        draft_active = True
+    except Exception as draft_err:
+        # Group chats and old clients fall back to a plain space placeholder;
+        # the streaming chunks below will replace it shortly anyway.
+        logger.debug("Initial empty draft failed (non-fatal): %s", draft_err)
 
     async def _report_error(code: str, *, prepared_chars: int | None = None, prepared_seconds: int | None = None) -> None:
-        await _cleanup_thinking()
         err_text = t(f"tldr.error.{code}", lang, fallback=t("insight.error.generic", lang))
         try:
             await update.message.reply_html(err_text)
@@ -265,11 +207,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Fetch content + metrics first so they're available even if streaming fails.
     try:
-        prepared = await prepare_tldr(
-            url, config,
-            github_token=user_github_token,
-            use_search=use_search,
-        )
+        prepared = await prepare_tldr(url, config, github_token=user_github_token)
     except TldrError as exc:
         code = exc.args[0] if exc.args else "generic"
         await _report_error(code)
@@ -285,8 +223,6 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             question=question if alias_key is None else None,
             model=user_model,
             entries=entries,
-            default_instruction_override=user_tldr_prompt,
-            byok=byok_route,
         ):
             accumulated += chunk
             if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:
@@ -307,6 +243,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         entities=draft_full_entities,
                         message_thread_id=thread_id,
                     )
+                    draft_active = True
                     last_sent_len = len(accumulated)
                 except Exception as draft_err:
                     logger.debug("sendMessageDraft failed (non-fatal): %s", draft_err)
@@ -336,12 +273,12 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         for e in body_entities
     ]
 
-    # Now that we're about to deliver the real reply, remove the placeholder
-    # FIRST. This avoids the chat shifting twice (once when the placeholder
-    # was added, once when the final message lands and the placeholder is
-    # deleted afterwards).
-    await _cleanup_thinking()
-
+    # The active draft is ephemeral and auto-expires when sendMessage lands
+    # for the same chat; we don't have to delete it explicitly (and there's
+    # no API for that anyway). Per Telegram docs: "the streamed draft is
+    # ephemeral and acts as a temporary 30-second preview - once the output
+    # is finalized, you must call sendMessage with the complete message to
+    # persist it in the user's chat".
     try:
         await bot.send_message(
             chat_id=chat_id,
@@ -371,6 +308,8 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         content_chars=len(prepared.content),
         video_seconds=prepared.video_seconds,
     )
+
+    _ = draft_active  # quiet linter: presence is for future cleanup hooks
 
 
 def register(app: Application) -> None:
