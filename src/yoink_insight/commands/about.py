@@ -10,7 +10,12 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-from yoink_insight.bot.middleware import get_insight_config, get_insight_settings_repo, get_insight_usage_repo
+from yoink_insight.bot.middleware import (
+    get_insight_config,
+    get_insight_prompts_repo,
+    get_insight_settings_repo,
+    get_insight_usage_repo,
+)
 from yoink_insight.commands._runner import run_insight_command
 from yoink_insight.services.gemini import GeminiSummarizer, InsightError
 
@@ -60,18 +65,16 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_html(t("insight.no_url", lang))
         return
 
-    thinking_msg = await update.message.reply_html(t("insight.thinking", lang))
-
     cache_repo = context.bot_data.get("insight_summary_cache")
     usage_repo = get_insight_usage_repo(context)
+    prompt_override = await get_insight_prompts_repo(context).get(user_id, "about")
 
     try:
         summarizer = GeminiSummarizer(config)
     except InsightError as exc:
         key = f"insight.error.{exc.args[0]}" if exc.args else "insight.error.generic"
-        await thinking_msg.edit_text(
+        await update.message.reply_html(
             t(key, lang, fallback=t("insight.error.generic", lang)),
-            parse_mode="HTML",
         )
         return
 
@@ -79,13 +82,15 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         command="about",
         url=url,
         lang=lang,
-        thinking_msg=thinking_msg,
+        update=update,
+        context=context,
         header=t("insight.about_header", lang),
         summarizer=summarizer,
         cache_repo=cache_repo,
         usage_repo=usage_repo,
         user_id=user_id,
         rate_limit_per_day=config.insight_rate_limit_per_day,
+        prompt_override=prompt_override,
     )
 
 

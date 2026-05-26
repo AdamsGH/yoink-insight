@@ -1,9 +1,18 @@
-"""Shared runner for /summary and /about - streaming via sendMessageDraft."""
+"""Shared runner for /summary and /about - delayed-thinking + streaming.
+
+Same UX pattern as /tldr: no "Thinking..." placeholder is posted up-front;
+instead an asyncio timer schedules it for _THINKING_DELAY seconds in the
+future, and it is only created if the LLM keeps quiet that long. The
+placeholder is removed before the final reply lands so the chat scrolls
+once, not twice.
+"""
 from __future__ import annotations
 
+import asyncio
 import logging
 
-from telegram import Message
+from telegram import Message, Update
+from telegram.ext import ContextTypes
 
 from yoink.core.i18n.loader import t
 from yoink_insight.services.gemini import GeminiSummarizer, InsightError, _extract_video_id
@@ -11,13 +20,17 @@ from yoink_insight.storage.repos import InsightSummaryCacheRepo, InsightUsageLog
 
 logger = logging.getLogger(__name__)
 
+# Show "Thinking..." only after this many seconds without any visible progress.
+# If Gemini starts streaming before that, the placeholder never appears.
+_THINKING_DELAY = 8.0
+
 # Minimum characters accumulated before sending a draft update.
-# Avoids flooding the API with tiny incremental edits.
 _DRAFT_MIN_CHARS = 80
 
-# draft_id is per-message; we use message_id as a stable unique int.
-def _draft_id(msg: Message) -> int:
-    return msg.message_id
+
+def _draft_id(message_id: int) -> int:
+    """Stable per-chat draft id: the user's command-message id."""
+    return message_id
 
 
 async def run_insight_command(
@@ -25,41 +38,41 @@ async def run_insight_command(
     command: str,
     url: str,
     lang: str,
-    thinking_msg: Message,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
     header: str,
     summarizer: GeminiSummarizer,
     cache_repo: InsightSummaryCacheRepo,
     usage_repo: InsightUsageLogRepo,
     user_id: int,
     rate_limit_per_day: int = 0,
+    prompt_override: str | None = None,
 ) -> None:
-    """Stream a Gemini response into thinking_msg via sendMessageDraft, then finalize.
+    """Run the gemini-backed /summary or /about command end to end.
 
-    Flow:
-      1. Check cache - if hit, edit thinking_msg directly and return.
-      2. Start Gemini streaming - send progressive drafts via sendMessageDraft.
-      3. On completion - finalize with edit_text (persists in chat).
-      4. Cache the result.
+    Cache check, rate-limit gate, streaming, and final delivery all happen
+    here. The caller is responsible only for validating the URL and
+    constructing the GeminiSummarizer.
     """
+    if not update.message:
+        return
+
     video_id = _extract_video_id(url)
-    # For /summary and /about the cache key is the bare video ID.
     cache_key = video_id
 
-    # Cache hit - instant response (does not count against rate limit)
+    # Cache hit -> instant reply, no placeholder, no draft.
     cached = await cache_repo.get(cache_key, lang, command) if cache_key else None
     if cached:
-        await thinking_msg.edit_text(f"{header}\n\n{cached}", parse_mode="HTML")
+        await update.message.reply_text(f"{header}\n\n{cached}", parse_mode="HTML")
         await usage_repo.log(user_id, command, video_id=video_id, lang=lang, status="cached")
         return
 
-    # Rate-limit gate (only fresh API calls count; 0 disables)
     if rate_limit_per_day > 0:
         used_today = await usage_repo.count_today(user_id)
         if used_today >= rate_limit_per_day:
-            await thinking_msg.edit_text(
+            await update.message.reply_html(
                 t("insight.error.rate_limited", lang, limit=rate_limit_per_day,
                   fallback=t("insight.error.generic", lang)),
-                parse_mode="HTML",
             )
             await usage_repo.log(
                 user_id, command, video_id=video_id, lang=lang,
@@ -67,18 +80,45 @@ async def run_insight_command(
             )
             return
 
-    bot = thinking_msg.get_bot()
-    chat_id = thinking_msg.chat_id
-    thread_id = getattr(thinking_msg, "message_thread_id", None)
-    draft_id = _draft_id(thinking_msg)
+    bot = context.bot
+    chat_id = update.message.chat_id
+    thread_id = getattr(update.message, "message_thread_id", None)
+    draft_id = _draft_id(update.message.message_id)
+    reply_to = update.message.message_id
+
+    # Lazy "Thinking..." placeholder, posted only if Gemini keeps quiet past
+    # _THINKING_DELAY. Tracked by ref so finally/error paths can clean it up.
+    thinking_msg: Message | None = None
+
+    async def _post_thinking() -> None:
+        nonlocal thinking_msg
+        await asyncio.sleep(_THINKING_DELAY)
+        try:
+            thinking_msg = await update.message.reply_html(t("insight.thinking", lang))
+        except Exception as exc:
+            logger.debug("Posting thinking placeholder failed: %s", exc)
+
+    thinking_task = asyncio.create_task(_post_thinking())
+
+    async def _cleanup_thinking() -> None:
+        if not thinking_task.done():
+            thinking_task.cancel()
+            try:
+                await thinking_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if thinking_msg is not None:
+            try:
+                await thinking_msg.delete()
+            except Exception:
+                pass
 
     accumulated = ""
     last_sent_len = 0
 
     try:
-        async for chunk in summarizer.stream_command(url, lang, command):
+        async for chunk in summarizer.stream_command(url, lang, command, prompt_override=prompt_override):
             accumulated += chunk
-            # Send draft update when we have enough new content
             if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:
                 try:
                     await bot.send_message_draft(
@@ -90,13 +130,16 @@ async def run_insight_command(
                     )
                     last_sent_len = len(accumulated)
                 except Exception as draft_err:
-                    # sendMessageDraft may not be supported on older clients - non-fatal
                     logger.debug("sendMessageDraft failed (non-fatal): %s", draft_err)
 
     except InsightError as exc:
+        await _cleanup_thinking()
         key = f"insight.error.{exc.args[0]}" if exc.args else "insight.error.generic"
         err_text = t(key, lang, fallback=t("insight.error.generic", lang))
-        await thinking_msg.edit_text(err_text, parse_mode="HTML")
+        try:
+            await update.message.reply_html(err_text)
+        except Exception as exc2:
+            logger.debug("Failed to deliver error reply: %s", exc2)
         await usage_repo.log(
             user_id, command, video_id=video_id, lang=lang,
             status="error", error_code=exc.args[0] if exc.args else "generic",
@@ -104,29 +147,29 @@ async def run_insight_command(
         return
 
     if not accumulated.strip():
-        await thinking_msg.edit_text(
-            t("insight.error.empty_response", lang, fallback=t("insight.error.generic", lang)),
-            parse_mode="HTML",
-        )
+        await _cleanup_thinking()
+        try:
+            await update.message.reply_html(
+                t("insight.error.empty_response", lang, fallback=t("insight.error.generic", lang)),
+            )
+        except Exception as exc:
+            logger.debug("Failed to deliver empty-response reply: %s", exc)
         await usage_repo.log(user_id, command, video_id=video_id, lang=lang, status="error", error_code="empty_response")
         return
 
-    # Finalize: send permanent message, then delete the "thinking" placeholder.
-    # edit_text on thinking_msg leaves the draft dangling ("typing" indicator stays).
+    # Drop placeholder BEFORE sending the final message so the chat scrolls
+    # exactly once (placeholder removal + final delivery merged).
+    await _cleanup_thinking()
+
     final_text = f"{header}\n\n{accumulated.strip()}"
     await bot.send_message(
         chat_id=chat_id,
         text=final_text,
         parse_mode="HTML",
-        reply_to_message_id=thinking_msg.reply_to_message.message_id if thinking_msg.reply_to_message else None,
+        reply_to_message_id=reply_to,
         message_thread_id=thread_id,
     )
-    try:
-        await thinking_msg.delete()
-    except Exception:
-        pass
 
-    # Cache for future requests
     if cache_key:
         try:
             await cache_repo.set(cache_key, lang, command, accumulated.strip())

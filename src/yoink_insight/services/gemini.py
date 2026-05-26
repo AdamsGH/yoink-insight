@@ -17,19 +17,44 @@ from yoink_insight.config import InsightConfig
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_PROMPT = """\
-Below is the transcript of a YouTube video. Summarize its key points as a \
-concise bullet list (10 bullets max). Reply in {lang}. Do not include any \
-preamble - output the bullet list directly.
+# Default built-in instruction blocks. The full prompt sent to Gemini is
+# assembled in _make_prompt by joining: <instruction> + <transcript block>.
+# Users can override the instruction body via insight_user_prompts; the
+# transcript block is appended automatically and is not user-controlled.
+SUMMARY_INSTRUCTION = """\
+You are summarising a YouTube video from its transcript. Produce a tight,
+specific bullet list (10 bullets max) covering the key claims, conclusions
+and examples actually present in the video.
 
-Transcript:
-{transcript}
+Rules:
+- Each bullet must carry a concrete claim, fact, or step. Skip filler like
+  "the speaker introduces the topic".
+- Preserve numbers, model names, version tags, and code/path tokens verbatim.
+- Do NOT describe the structure of the video ("the author explains..."); name
+  the actual point being made.
+- Use Markdown: '- ' for bullets, **bold** for inline emphasis, `code` for
+  identifiers. No HTML tags.
+- No preamble, no closing remarks. Output only the bullets.
+- Reply in {lang}.
 """
 
-ABOUT_PROMPT = """\
-Below is the transcript of a YouTube video. Describe what the video is about \
-in 2-3 sentences. Be concise and factual. Reply in {lang}. Output only the \
-description, no preamble.
+ABOUT_INSTRUCTION = """\
+You are describing a YouTube video to someone deciding whether to watch it,
+based on its transcript. Produce 2-3 sentences (max ~60 words).
+
+Rules:
+- First sentence: what the video is about (subject + angle).
+- Optional second sentence: most distinctive thing it offers (a specific
+  argument, demo, dataset, conclusion).
+- Optional third sentence: who would find it useful, in concrete terms ("if
+  you maintain Postgres clusters"), not vague ("developers").
+- Preserve names, versions, and tokens verbatim.
+- Be factual; do not editorialise or speculate beyond the transcript.
+- No preamble, no "this video". Just the description text.
+- Reply in {lang}.
+"""
+
+_TRANSCRIPT_BLOCK = """\
 
 Transcript:
 {transcript}
@@ -143,29 +168,42 @@ class GeminiSummarizer:
             logger.error("Gemini stream error: %s", exc)
             raise InsightError("api_error") from exc
 
-    def _make_prompt(self, command: str, transcript: str, lang: str) -> str:
-        if command == "summary":
-            return SUMMARY_PROMPT.format(transcript=transcript, lang=lang)
-        return ABOUT_PROMPT.format(transcript=transcript, lang=lang)
+    def _make_prompt(
+        self,
+        command: str,
+        transcript: str,
+        lang: str,
+        instruction_override: str | None = None,
+    ) -> str:
+        if instruction_override and instruction_override.strip():
+            instruction = instruction_override.strip()
+        elif command == "summary":
+            instruction = SUMMARY_INSTRUCTION
+        else:
+            instruction = ABOUT_INSTRUCTION
+        if "{lang}" in instruction:
+            instruction = instruction.format(lang=lang)
+        return instruction + _TRANSCRIPT_BLOCK.format(transcript=transcript)
 
-    async def summarize(self, url: str, lang: str) -> str:
+    async def summarize(self, url: str, lang: str, prompt_override: str | None = None) -> str:
         """Return a bullet-list summary. Raises InsightError on failure."""
         video_id = _extract_video_id(url)
         if not video_id:
             raise InsightError("not_youtube")
         transcript = await asyncio.to_thread(_fetch_transcript, video_id, self._lang_csv)
-        return await self._run(SUMMARY_PROMPT.format(transcript=transcript, lang=lang))
+        return await self._run(self._make_prompt("summary", transcript, lang, prompt_override))
 
-    async def describe(self, url: str, lang: str) -> str:
+    async def describe(self, url: str, lang: str, prompt_override: str | None = None) -> str:
         """Return a 2-3 sentence description. Raises InsightError on failure."""
         video_id = _extract_video_id(url)
         if not video_id:
             raise InsightError("not_youtube")
         transcript = await asyncio.to_thread(_fetch_transcript, video_id, self._lang_csv)
-        return await self._run(ABOUT_PROMPT.format(transcript=transcript, lang=lang))
+        return await self._run(self._make_prompt("about", transcript, lang, prompt_override))
 
     async def stream_command(
-        self, url: str, lang: str, command: str
+        self, url: str, lang: str, command: str,
+        prompt_override: str | None = None,
     ):
         """Yield text chunks for summary or describe command.
 
@@ -176,6 +214,6 @@ class GeminiSummarizer:
         if not video_id:
             raise InsightError("not_youtube")
         transcript = await asyncio.to_thread(_fetch_transcript, video_id, self._lang_csv)
-        prompt = self._make_prompt(command, transcript, lang)
+        prompt = self._make_prompt(command, transcript, lang, prompt_override)
         async for chunk in self.stream(prompt):
             yield chunk

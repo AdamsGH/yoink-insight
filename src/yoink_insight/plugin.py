@@ -28,8 +28,14 @@ class InsightPlugin:
         return InsightConfig
 
     def get_models(self) -> list:
-        from yoink_insight.storage.models import InsightAccess, InsightSummaryCache, InsightUsageLog, InsightUserSettings
-        return [InsightAccess, InsightUserSettings, InsightUsageLog, InsightSummaryCache]
+        from yoink_insight.storage.models import (
+            InsightAccess,
+            InsightSummaryCache,
+            InsightUsageLog,
+            InsightUserPrompt,
+            InsightUserSettings,
+        )
+        return [InsightAccess, InsightUserSettings, InsightUserPrompt, InsightUsageLog, InsightSummaryCache]
 
     def get_handlers(self) -> list:
         from yoink_insight.commands import get_handler_specs
@@ -194,6 +200,13 @@ class InsightPlugin:
                 description="Access to /tldr command (any URL summarised via gateway LLM)",
                 default_min_role=None,  # explicit grant required; owner always passes
             ),
+            FeatureSpec(
+                plugin="insight",
+                feature="search",
+                label="AI Search",
+                description="Route /summary, /about and /tldr fetch through the gateway answer engine (/v1/search). Enables web-search + smart scrape for URLs and topical questions.",
+                default_min_role=None,  # explicit grant required; owner always passes
+            ),
         ]
 
     def get_jobs(self) -> list[JobSpec] | None:
@@ -216,12 +229,18 @@ class InsightPlugin:
     async def setup(self, ctx: PluginContext) -> None:
         """Populate bot_data with insight-specific services."""
         from yoink_insight.services.access import InsightAccessService
-        from yoink_insight.storage.repos import InsightAccessRepo, InsightUsageLogRepo, InsightUserSettingsRepo
+        from yoink_insight.storage.repos import (
+            InsightAccessRepo,
+            InsightUsageLogRepo,
+            InsightUserPromptRepo,
+            InsightUserSettingsRepo,
+        )
 
         config = self._config
         repo = InsightAccessRepo(ctx.session_factory)
         settings_repo = InsightUserSettingsRepo(ctx.session_factory)
         usage_repo = InsightUsageLogRepo(ctx.session_factory)
+        prompts_repo = InsightUserPromptRepo(ctx.session_factory)
         owner_id = ctx.config.owner_id
         access_service = InsightAccessService(repo, owner_id, ctx.session_factory)
 
@@ -232,6 +251,7 @@ class InsightPlugin:
         ctx.bot_data["insight_repo"] = repo
         ctx.bot_data["insight_settings_repo"] = settings_repo
         ctx.bot_data["insight_usage_repo"] = usage_repo
+        ctx.bot_data["insight_prompts_repo"] = prompts_repo
         ctx.bot_data["insight_access"] = access_service
         ctx.bot_data["insight_summary_cache"] = cache_repo
 

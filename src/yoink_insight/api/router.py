@@ -27,7 +27,13 @@ from yoink_insight.api.schemas import (
     UserLookupResult,
 )
 from yoink_insight.config import InsightConfig
-from yoink_insight.storage.models import InsightAccess, InsightTldrAlias, InsightUsageLog, InsightUserSettings
+from yoink_insight.storage.models import (
+    InsightAccess,
+    InsightTldrAlias,
+    InsightUsageLog,
+    InsightUserPrompt,
+    InsightUserSettings,
+)
 
 router = APIRouter(tags=["insight"], responses={401: {"description": "Not authenticated"}, 403: {"description": "Insufficient role"}})
 
@@ -222,13 +228,36 @@ async def _has_insight_access(session: AsyncSession, user: User) -> bool:
     return legacy is not None
 
 
+# Reading-time heuristics for /me/stats time-saved.
+#
+# Web pages: ~200 wpm * ~5 chars/word -> 1000 chars/min.
+#   minutes_saved = content_chars / _CHARS_PER_MINUTE_WEB
+# YouTube without duration: fall back to transcript word count / 150 wpm.
+#   transcript_word_count ~= content_chars / _AVG_WORD_LEN
+_CHARS_PER_MINUTE_WEB = 1000
+_AVG_WORD_LEN = 5.5
+_TRANSCRIPT_WPM = 150
+
+
+def _minutes_saved_for_row(video_seconds: int | None, content_chars: int | None, is_youtube: bool) -> float:
+    """Return minutes-saved estimate for a single tldr usage row."""
+    if video_seconds and video_seconds > 0:
+        return video_seconds / 60.0
+    if not content_chars or content_chars <= 0:
+        return 0.0
+    if is_youtube:
+        words = content_chars / _AVG_WORD_LEN
+        return words / _TRANSCRIPT_WPM
+    return content_chars / _CHARS_PER_MINUTE_WEB
+
+
 @router.get("/me/stats", summary="My AI summary usage stats")
 async def get_my_insight_stats(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     from datetime import timedelta
-    from sqlalchemy import cast, Date, func
+    from sqlalchemy import cast, Date, func, or_
 
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -247,13 +276,17 @@ async def get_my_insight_stats(
         base.where(InsightUsageLog.created_at >= today_start)
     )).scalar() or 0
 
-    # By command breakdown
+    # By command breakdown. Collapse 'tldr:<alias>' rows into 'tldr' so the
+    # AI Summaries card stays readable; per-alias detail lives in the tldr block.
     cmd_rows = (await session.execute(
         select(InsightUsageLog.command, func.count())
         .where(InsightUsageLog.user_id == current_user.id, InsightUsageLog.status == "ok")
         .group_by(InsightUsageLog.command)
     )).all()
-    by_command = {row[0]: row[1] for row in cmd_rows}
+    by_command: dict[str, int] = {}
+    for row in cmd_rows:
+        bucket = "tldr" if (row[0] or "").startswith("tldr") else row[0]
+        by_command[bucket] = by_command.get(bucket, 0) + row[1]
 
     # Daily history (last 30 days)
     day_rows = (await session.execute(
@@ -271,13 +304,169 @@ async def get_my_insight_stats(
     )).all()
     by_day = [{"date": str(row[0]), "count": row[1]} for row in day_rows]
 
+    # TLDR-specific block: counters, by_alias, by_kind, by_day with minutes_saved.
+    tldr_filter = or_(
+        InsightUsageLog.command == "tldr",
+        InsightUsageLog.command.like("tldr:%"),
+    )
+    ok_or_cached = InsightUsageLog.status.in_(("ok", "cached"))
+    tldr_base = select(func.count()).select_from(InsightUsageLog).where(
+        InsightUsageLog.user_id == current_user.id,
+        tldr_filter,
+        ok_or_cached,
+    )
+    tldr_total = (await session.execute(tldr_base)).scalar() or 0
+    tldr_week = (await session.execute(
+        tldr_base.where(InsightUsageLog.created_at >= week_start)
+    )).scalar() or 0
+    tldr_today = (await session.execute(
+        tldr_base.where(InsightUsageLog.created_at >= today_start)
+    )).scalar() or 0
+
+    alias_rows = (await session.execute(
+        select(InsightUsageLog.alias_key, func.count())
+        .where(
+            InsightUsageLog.user_id == current_user.id,
+            tldr_filter,
+            ok_or_cached,
+        )
+        .group_by(InsightUsageLog.alias_key)
+    )).all()
+    tldr_by_alias = [
+        {"alias": row[0] or "_none", "count": row[1]}
+        for row in alias_rows
+    ]
+    tldr_by_alias.sort(key=lambda r: r["count"], reverse=True)
+
+    yt_count = (await session.execute(
+        tldr_base.where(InsightUsageLog.video_seconds.is_not(None))
+    )).scalar() or 0
+    web_count = tldr_total - yt_count
+
+    # Iterate per-row to compute minutes_saved deterministically across the
+    # heuristics (cheap: row count is bounded by tldr usage, not by all events).
+    detail_rows = (await session.execute(
+        select(
+            cast(InsightUsageLog.created_at, Date).label("date"),
+            InsightUsageLog.video_seconds,
+            InsightUsageLog.content_chars,
+            InsightUsageLog.alias_key,
+        ).where(
+            InsightUsageLog.user_id == current_user.id,
+            tldr_filter,
+            ok_or_cached,
+            InsightUsageLog.created_at >= thirty_days_ago,
+        )
+    )).all()
+
+    tldr_by_day_map: dict[str, dict] = {}
+    video_minutes_saved = 0.0
+    reading_minutes_saved = 0.0
+    for d, v_sec, c_chars, alias_key in detail_rows:
+        is_yt = v_sec is not None
+        minutes = _minutes_saved_for_row(v_sec, c_chars, is_yt)
+        if is_yt:
+            video_minutes_saved += minutes
+        else:
+            reading_minutes_saved += minutes
+        bucket = tldr_by_day_map.setdefault(str(d), {"count": 0, "minutes_saved": 0.0, "by_alias": {}})
+        bucket["count"] += 1
+        bucket["minutes_saved"] += minutes
+        alias_bucket = alias_key or "_none"
+        bucket["by_alias"][alias_bucket] = bucket["by_alias"].get(alias_bucket, 0) + 1
+
+    tldr_by_day = [
+        {
+            "date": k,
+            "count": int(v["count"]),
+            "minutes_saved": round(v["minutes_saved"], 1),
+            "by_alias": v["by_alias"],
+        }
+        for k, v in sorted(tldr_by_day_map.items())
+    ]
+
+    # Totals across all-time (not just 30d) for the top-level minutes_saved counter.
+    all_rows = (await session.execute(
+        select(
+            InsightUsageLog.video_seconds,
+            InsightUsageLog.content_chars,
+        ).where(
+            InsightUsageLog.user_id == current_user.id,
+            tldr_filter,
+            ok_or_cached,
+        )
+    )).all()
+    all_video_minutes = 0.0
+    all_reading_minutes = 0.0
+    for v_sec, c_chars in all_rows:
+        is_yt = v_sec is not None
+        minutes = _minutes_saved_for_row(v_sec, c_chars, is_yt)
+        if is_yt:
+            all_video_minutes += minutes
+        else:
+            all_reading_minutes += minutes
+
+    tldr_block = {
+        "total": tldr_total,
+        "this_week": tldr_week,
+        "today": tldr_today,
+        "by_alias": tldr_by_alias,
+        "by_kind": {"youtube": yt_count, "web": web_count},
+        "by_day": tldr_by_day,
+        "minutes_saved": round(all_video_minutes + all_reading_minutes, 1),
+        "video_minutes_saved": round(all_video_minutes, 1),
+        "reading_minutes_saved": round(all_reading_minutes, 1),
+    }
+
     return {
         "total_summaries": total,
         "this_week": this_week,
         "today": today,
         "by_command": by_command,
         "by_day": by_day,
+        "tldr": tldr_block,
     }
+
+
+_BUILTIN_PROMPT_DEFAULTS_CACHE: dict[str, str] | None = None
+_BUILTIN_ALIAS_DEFAULTS_CACHE: dict[str, str] | None = None
+
+
+def _get_builtin_prompt_defaults() -> dict[str, str]:
+    """Return the built-in prompt instructions for {summary, about, tldr}.
+
+    Cached after first call (defaults are module-level constants).
+    """
+    global _BUILTIN_PROMPT_DEFAULTS_CACHE
+    if _BUILTIN_PROMPT_DEFAULTS_CACHE is None:
+        from yoink_insight.services.gemini import ABOUT_INSTRUCTION, SUMMARY_INSTRUCTION
+        from yoink_insight.services.tldr import TLDR_INSTRUCTION
+        _BUILTIN_PROMPT_DEFAULTS_CACHE = {
+            "summary": SUMMARY_INSTRUCTION,
+            "about": ABOUT_INSTRUCTION,
+            "tldr": TLDR_INSTRUCTION,
+        }
+    return _BUILTIN_PROMPT_DEFAULTS_CACHE
+
+
+def _get_builtin_alias_defaults() -> dict[str, str]:
+    """Return the built-in /tldr alias prompts keyed by alias name.
+
+    Cached after first call. {lang} placeholders are kept verbatim so the
+    UI can decide how to render them (defaults dialog shows the raw body).
+    """
+    global _BUILTIN_ALIAS_DEFAULTS_CACHE
+    if _BUILTIN_ALIAS_DEFAULTS_CACHE is None:
+        from yoink_insight.services.tldr import _BUILTIN_ALIASES
+        _BUILTIN_ALIAS_DEFAULTS_CACHE = dict(_BUILTIN_ALIASES)
+    return _BUILTIN_ALIAS_DEFAULTS_CACHE
+
+
+async def _load_user_prompts(session: AsyncSession, user_id: int) -> dict[str, str]:
+    rows = (await session.execute(
+        select(InsightUserPrompt).where(InsightUserPrompt.user_id == user_id)
+    )).scalars().all()
+    return {r.command: r.prompt for r in rows if r.prompt and r.prompt.strip()}
 
 
 @router.get("/settings/me", response_model=InsightUserSettingsResponse, summary="My AI summary settings")
@@ -287,19 +476,27 @@ async def get_my_insight_settings(
 ) -> InsightUserSettingsResponse:
     has_gemini_access = await _has_insight_access(session, current_user)
     has_tldr = await _has_feature_access(session, current_user, "tldr")
+    has_search = await _has_feature_access(session, current_user, "search")
     config = InsightConfig()
     settings_row = await session.get(InsightUserSettings, current_user.id)
     lang = settings_row.lang if settings_row else config.insight_default_lang
     tldr_model = settings_row.tldr_model if settings_row else None
     github_token = settings_row.github_token if settings_row else None
+    use_search = bool(settings_row.use_search) if settings_row else False
     allowed = await _get_tldr_allowed_models_from_db(session, config)
+    user_prompts = await _load_user_prompts(session, current_user.id)
     return InsightUserSettingsResponse(
         lang=lang,
         has_gemini_access=has_gemini_access,
         has_tldr_access=has_tldr,
+        has_search_access=has_search,
         tldr_model=tldr_model,
         tldr_allowed_models=allowed if has_tldr else [],
         github_token_set=bool(github_token),
+        use_search=use_search if has_search else False,
+        prompts=user_prompts,
+        prompt_defaults=_get_builtin_prompt_defaults(),
+        alias_defaults=_get_builtin_alias_defaults(),
     )
 
 
@@ -311,6 +508,7 @@ async def update_my_insight_settings(
 ) -> InsightUserSettingsResponse:
     has_gemini_access = await _has_insight_access(session, current_user)
     has_tldr = await _has_feature_access(session, current_user, "tldr")
+    has_search = await _has_feature_access(session, current_user, "search")
     if not has_gemini_access and not has_tldr:
         raise HTTPException(status_code=403, detail="You do not have Insight access.")
 
@@ -323,6 +521,10 @@ async def update_my_insight_settings(
         if tldr_model not in allowed:
             raise HTTPException(status_code=400, detail=f"Model '{tldr_model}' is not in the allowed list.")
 
+    # use_search requires the 'insight:search' feature.
+    if body.use_search is True and not has_search:
+        raise HTTPException(status_code=403, detail="You do not have AI Search access.")
+
     settings_row = await session.get(InsightUserSettings, current_user.id)
     if settings_row is None:
         settings_row = InsightUserSettings(
@@ -330,6 +532,7 @@ async def update_my_insight_settings(
             lang=body.lang,
             tldr_model=tldr_model,
             github_token=body.github_token,
+            use_search=bool(body.use_search) if body.use_search is not None else False,
         )
         session.add(settings_row)
     else:
@@ -338,16 +541,52 @@ async def update_my_insight_settings(
             settings_row.tldr_model = tldr_model
         if body.github_token is not None:
             settings_row.github_token = body.github_token or None
+        if body.use_search is not None:
+            settings_row.use_search = bool(body.use_search)
+
+    # Prompt overrides: only commands matching the user's granted features
+    # are accepted; the rest are silently dropped to avoid noisy 4xx on a
+    # full settings PATCH that includes inactive command fields.
+    if body.prompts is not None:
+        allowed_commands: set[str] = set()
+        if has_gemini_access:
+            allowed_commands.update({"summary", "about"})
+        if has_tldr:
+            allowed_commands.add("tldr")
+        for cmd, prompt in body.prompts.items():
+            if cmd not in allowed_commands:
+                continue
+            existing = await session.get(InsightUserPrompt, (current_user.id, cmd))
+            if not prompt or not prompt.strip():
+                if existing is not None:
+                    await session.delete(existing)
+                continue
+            if existing is None:
+                session.add(InsightUserPrompt(
+                    user_id=current_user.id,
+                    command=cmd,
+                    prompt=prompt.strip(),
+                ))
+            else:
+                existing.prompt = prompt.strip()
+                existing.updated_at = datetime.now(timezone.utc)
+
     await session.commit()
     await session.refresh(settings_row)
     allowed = await _get_tldr_allowed_models_from_db(session, config)
+    user_prompts = await _load_user_prompts(session, current_user.id)
     return InsightUserSettingsResponse(
         lang=settings_row.lang,
         has_gemini_access=has_gemini_access,
         has_tldr_access=has_tldr,
+        has_search_access=has_search,
         tldr_model=settings_row.tldr_model,
         tldr_allowed_models=allowed if has_tldr else [],
         github_token_set=bool(settings_row.github_token),
+        use_search=bool(settings_row.use_search) if has_search else False,
+        prompts=user_prompts,
+        prompt_defaults=_get_builtin_prompt_defaults(),
+        alias_defaults=_get_builtin_alias_defaults(),
     )
 
 
@@ -513,26 +752,22 @@ async def _fetch_gateway_models(gw_url: str, gw_key: str, config: InsightConfig)
 _MAX_ALIASES_PER_USER = 20
 
 
-@router.get("/aliases", response_model=list[TldrAliasResponse], summary="List my /tldr aliases")
-async def list_my_aliases(
-    session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> list[TldrAliasResponse]:
-    if not await _has_feature_access(session, current_user, "tldr"):
-        raise HTTPException(status_code=403, detail="No TLDR access.")
-    rows = (await session.execute(
-        select(InsightTldrAlias)
-        .where(InsightTldrAlias.user_id == current_user.id)
-        .order_by(InsightTldrAlias.created_at)
-    )).scalars().all()
-    return list(rows)
-
-
 _BUILTIN_ALIAS_NAMES = {"max", "nobullshit", "noshit"}
 
 
-def _validate_aliases(raw: str) -> list[str]:
-    """Parse, normalise, and validate a comma-separated alias string."""
+def _row_to_response(row: InsightTldrAlias) -> TldrAliasResponse:
+    return TldrAliasResponse(
+        id=row.id,
+        aliases=row.aliases,
+        prompt=row.prompt,
+        domains=row.domains,
+        target_alias=row.target_alias,
+        created_at=row.created_at,
+    )
+
+
+def _validate_alias_keys(raw: str) -> list[str]:
+    """Parse, normalise, and validate a comma-separated alias-keyword string."""
     from yoink_insight.services.tldr import parse_aliases
     keys = parse_aliases(raw)
     if not keys:
@@ -545,6 +780,58 @@ def _validate_aliases(raw: str) -> list[str]:
     return keys
 
 
+def _validate_domains(raw: str | None) -> list[str]:
+    """Parse, normalise, and validate a comma-separated domain-glob string.
+
+    Globs accept fnmatch syntax. We lowercase tokens and reject obviously
+    malformed entries (whitespace, schemes); empty list is allowed and means
+    "no domain binding".
+    """
+    from yoink_insight.services.tldr import parse_domains
+    if not raw or not raw.strip():
+        return []
+    domains = parse_domains(raw)
+    for d in domains:
+        if any(c.isspace() for c in d):
+            raise HTTPException(status_code=400, detail=f"'{d}' contains whitespace.")
+        if "://" in d:
+            raise HTTPException(status_code=400, detail=f"'{d}' must not include scheme (use host[/path]).")
+    return domains
+
+
+def _validate_target_alias(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    key = raw.strip().lower()
+    if key not in _BUILTIN_ALIAS_NAMES:
+        raise HTTPException(status_code=400, detail=f"'{key}' is not a known built-in alias.")
+    return key
+
+
+def _collect_existing_keys(rows: list[InsightTldrAlias]) -> set[str]:
+    from yoink_insight.services.tldr import parse_aliases
+    out: set[str] = set()
+    for r in rows:
+        if r.aliases:
+            out.update(parse_aliases(r.aliases))
+    return out
+
+
+@router.get("/aliases", response_model=list[TldrAliasResponse], summary="List my /tldr aliases")
+async def list_my_aliases(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[TldrAliasResponse]:
+    if not await _has_feature_access(session, current_user, "tldr"):
+        raise HTTPException(status_code=403, detail="No TLDR access.")
+    rows = (await session.execute(
+        select(InsightTldrAlias)
+        .where(InsightTldrAlias.user_id == current_user.id)
+        .order_by(InsightTldrAlias.created_at)
+    )).scalars().all()
+    return [_row_to_response(r) for r in rows]
+
+
 @router.post("/aliases", response_model=TldrAliasResponse, status_code=201, summary="Create /tldr alias")
 async def create_alias(
     body: TldrAliasCreate,
@@ -553,26 +840,41 @@ async def create_alias(
 ) -> TldrAliasResponse:
     if not await _has_feature_access(session, current_user, "tldr"):
         raise HTTPException(status_code=403, detail="No TLDR access.")
-    keys = _validate_aliases(body.aliases)
+
+    target_alias = _validate_target_alias(body.target_alias)
+    domains = _validate_domains(body.domains)
+    keys: list[str] = []
+    if body.aliases and body.aliases.strip():
+        keys = _validate_alias_keys(body.aliases)
+
+    # Shape rule: either keys+prompt, or target_alias, or domains-only-with-target.
+    if keys and not (body.prompt and body.prompt.strip()):
+        raise HTTPException(status_code=400, detail="prompt is required when aliases are provided.")
+    if not keys and not target_alias:
+        raise HTTPException(status_code=400, detail="Provide aliases+prompt, or target_alias, or both.")
+    if not keys and not domains and target_alias:
+        raise HTTPException(status_code=400, detail="target_alias rows must carry at least one domain.")
+
     existing_rows = (await session.execute(
         select(InsightTldrAlias).where(InsightTldrAlias.user_id == current_user.id)
     )).scalars().all()
     if len(existing_rows) >= _MAX_ALIASES_PER_USER:
         raise HTTPException(status_code=400, detail=f"Maximum {_MAX_ALIASES_PER_USER} aliases per user.")
-    # Check that none of the new keys collide with existing ones
-    existing_keys: set[str] = set()
-    for r in existing_rows:
-        from yoink_insight.services.tldr import parse_aliases
-        existing_keys.update(parse_aliases(r.aliases))
-    conflicts = set(keys) & existing_keys
+    conflicts = set(keys) & _collect_existing_keys(list(existing_rows))
     if conflicts:
         raise HTTPException(status_code=409, detail=f"Already exists: {', '.join(sorted(conflicts))}.")
-    normalized = ", ".join(keys)
-    row = InsightTldrAlias(user_id=current_user.id, aliases=normalized, prompt=body.prompt.strip())
+
+    row = InsightTldrAlias(
+        user_id=current_user.id,
+        aliases=", ".join(keys) if keys else None,
+        prompt=body.prompt.strip() if (keys and body.prompt) else None,
+        domains=", ".join(domains) if domains else None,
+        target_alias=target_alias,
+    )
     session.add(row)
     await session.commit()
     await session.refresh(row)
-    return row
+    return _row_to_response(row)
 
 
 @router.patch("/aliases/{alias_id}", response_model=TldrAliasResponse, summary="Update /tldr alias")
@@ -585,26 +887,48 @@ async def update_alias(
     row = await session.get(InsightTldrAlias, alias_id)
     if row is None or row.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Alias not found.")
-    keys = _validate_aliases(body.aliases)
-    # Check conflicts with OTHER rows
-    other_rows = (await session.execute(
-        select(InsightTldrAlias).where(
-            InsightTldrAlias.user_id == current_user.id,
-            InsightTldrAlias.id != alias_id,
-        )
-    )).scalars().all()
-    from yoink_insight.services.tldr import parse_aliases
-    other_keys: set[str] = set()
-    for r in other_rows:
-        other_keys.update(parse_aliases(r.aliases))
-    conflicts = set(keys) & other_keys
-    if conflicts:
-        raise HTTPException(status_code=409, detail=f"Already used in another alias: {', '.join(sorted(conflicts))}.")
-    row.aliases = ", ".join(keys)
-    row.prompt = body.prompt.strip()
+
+    new_target = _validate_target_alias(body.target_alias) if body.target_alias is not None else row.target_alias
+    new_domains_list = _validate_domains(body.domains) if body.domains is not None else (
+        []
+        if row.domains is None
+        else _validate_domains(row.domains)
+    )
+    new_keys: list[str] = []
+    if body.aliases is not None:
+        if body.aliases.strip():
+            new_keys = _validate_alias_keys(body.aliases)
+    elif row.aliases:
+        from yoink_insight.services.tldr import parse_aliases
+        new_keys = parse_aliases(row.aliases)
+
+    new_prompt = body.prompt if body.prompt is not None else row.prompt
+    if new_keys and not (new_prompt and new_prompt.strip()):
+        raise HTTPException(status_code=400, detail="prompt is required when aliases are provided.")
+    if not new_keys and not new_target:
+        raise HTTPException(status_code=400, detail="Provide aliases+prompt, or target_alias.")
+    if not new_keys and not new_domains_list and new_target:
+        raise HTTPException(status_code=400, detail="target_alias rows must carry at least one domain.")
+
+    # Conflict check across OTHER rows (only if keys present).
+    if new_keys:
+        other_rows = (await session.execute(
+            select(InsightTldrAlias).where(
+                InsightTldrAlias.user_id == current_user.id,
+                InsightTldrAlias.id != alias_id,
+            )
+        )).scalars().all()
+        conflicts = set(new_keys) & _collect_existing_keys(list(other_rows))
+        if conflicts:
+            raise HTTPException(status_code=409, detail=f"Already used in another alias: {', '.join(sorted(conflicts))}.")
+
+    row.aliases = ", ".join(new_keys) if new_keys else None
+    row.prompt = new_prompt.strip() if (new_keys and new_prompt) else None
+    row.domains = ", ".join(new_domains_list) if new_domains_list else None
+    row.target_alias = new_target
     await session.commit()
     await session.refresh(row)
-    return row
+    return _row_to_response(row)
 
 
 @router.delete("/aliases/{alias_id}", status_code=204, summary="Delete /tldr alias")

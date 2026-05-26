@@ -370,25 +370,31 @@ async def fetch_web_content(url: str, max_chars: int, github_token: str | None =
     host = (parsed.hostname or "").lower()
 
     # GitHub
-    if host in _GITHUB_HOSTS:
+    is_github = host in _GITHUB_HOSTS
+    if is_github:
         route = _parse_github_url(url)
         if route:
+            logger.debug("GitHub fetch op=%s auth=%s url=%s", route.get("op"), bool(github_token), url)
             try:
                 text = await _github_fetch(route, github_token)
                 if text.strip():
                     if len(text) > max_chars:
                         text = text[:max_chars] + "\n\n[Content truncated]"
                     return FetchResult(content=text, title=None, via=f"github-api:{route['op']}")
+                logger.warning("GitHub API returned empty content for %s op=%s, falling back", url, route.get("op"))
             except Exception as exc:
-                logger.warning("GitHub API fetch failed for %s: %s", url, exc)
+                logger.warning("GitHub API fetch failed for %s: %s: %s", url, type(exc).__name__, exc)
 
     async with httpx.AsyncClient(
         timeout=_TIMEOUT,
         follow_redirects=True,
         headers={"User-Agent": _USER_AGENT},
     ) as client:
-        # llms.txt
-        matched_url = await _check_llms_txt(url, client)
+        # llms.txt (skip for GitHub - they don't have /llms.txt)
+        if not is_github:
+            matched_url = await _check_llms_txt(url, client)
+        else:
+            matched_url = None
         fetch_url = matched_url or url
         via_prefix = "llms.txt+" if matched_url else ""
 
@@ -401,7 +407,7 @@ async def fetch_web_content(url: str, max_chars: int, github_token: str | None =
         except httpx.RequestError as exc:
             logger.warning("HTTP fetch failed for %s: %s", fetch_url, exc)
 
-        if html:
+        if html and not is_github:
             # readability
             text, title = await asyncio.to_thread(_readability_extract, html, fetch_url)
             if text and len(text) > 200:
@@ -424,8 +430,8 @@ async def fetch_web_content(url: str, max_chars: int, github_token: str | None =
                     text = text[:max_chars] + "\n\n[Content truncated]"
                 return FetchResult(content=text, title=None, via=name)
 
-        # Raw HTML strip as last resort
-        if html and len(html) > 200:
+        # Raw HTML strip as last resort (skip for GitHub - HTML is useless there)
+        if html and not is_github and len(html) > 200:
             text = await asyncio.to_thread(_html_to_text, html)
             if text and len(text) > 100:
                 title_m = re.search(r"<title[^>]*>([^<]+)</title>", html, re.I)

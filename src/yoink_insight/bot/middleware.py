@@ -5,7 +5,12 @@ from telegram.ext import ContextTypes
 
 from yoink_insight.config import InsightConfig
 from yoink_insight.services.access import InsightAccessService
-from yoink_insight.storage.repos import InsightAccessRepo, InsightUsageLogRepo, InsightUserSettingsRepo
+from yoink_insight.storage.repos import (
+    InsightAccessRepo,
+    InsightUsageLogRepo,
+    InsightUserPromptRepo,
+    InsightUserSettingsRepo,
+)
 
 
 def get_insight_config(context: ContextTypes.DEFAULT_TYPE) -> InsightConfig:
@@ -26,6 +31,10 @@ def get_insight_settings_repo(context: ContextTypes.DEFAULT_TYPE) -> InsightUser
 
 def get_insight_usage_repo(context: ContextTypes.DEFAULT_TYPE) -> InsightUsageLogRepo:
     return context.bot_data["insight_usage_repo"]
+
+
+def get_insight_prompts_repo(context: ContextTypes.DEFAULT_TYPE) -> InsightUserPromptRepo:
+    return context.bot_data["insight_prompts_repo"]
 
 
 def get_owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:
