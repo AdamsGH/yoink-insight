@@ -3,12 +3,18 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case as sa_case, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import User
-from yoink_insight.storage.models import InsightAccess, InsightSummaryCache, InsightUsageLog, InsightUserSettings
+from yoink_insight.storage.models import (
+    InsightAccess,
+    InsightSummaryCache,
+    InsightUsageLog,
+    InsightUserPrompt,
+    InsightUserSettings,
+)
 
 _CACHE_TTL_HOURS = 24
 
@@ -111,6 +117,28 @@ class InsightUserSettingsRepo:
             row = await s.get(InsightUserSettings, user_id)
             return row.github_token if row is not None else None
 
+    async def get_use_search(self, user_id: int) -> bool:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            return bool(row.use_search) if row is not None else False
+
+    async def set_use_search(self, user_id: int, value: bool) -> InsightUserSettings:
+        async with self._sf() as s:
+            row = await s.get(InsightUserSettings, user_id)
+            if row is None:
+                user = await s.get(User, user_id)
+                if user is None:
+                    user = User(id=user_id)
+                    s.add(user)
+                    await s.flush()
+                row = InsightUserSettings(user_id=user_id, use_search=value)
+                s.add(row)
+            else:
+                row.use_search = value
+            await s.commit()
+            await s.refresh(row)
+            return row
+
     async def set_github_token(self, user_id: int, token: str | None) -> InsightUserSettings:
         async with self._sf() as s:
             row = await s.get(InsightUserSettings, user_id)
@@ -145,6 +173,49 @@ class InsightUserSettingsRepo:
             await s.commit()
             await s.refresh(row)
             return row
+
+
+class InsightUserPromptRepo:
+    """CRUD for per-user prompt overrides keyed by (user_id, command)."""
+
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def get(self, user_id: int, command: str) -> str | None:
+        async with self._sf() as s:
+            row = await s.get(InsightUserPrompt, (user_id, command))
+            if row is None or not row.prompt or not row.prompt.strip():
+                return None
+            return row.prompt
+
+    async def get_all(self, user_id: int) -> dict[str, str]:
+        async with self._sf() as s:
+            rows = (await s.execute(
+                select(InsightUserPrompt).where(InsightUserPrompt.user_id == user_id)
+            )).scalars().all()
+            return {r.command: r.prompt for r in rows if r.prompt and r.prompt.strip()}
+
+    async def set(self, user_id: int, command: str, prompt: str | None) -> None:
+        """Upsert or delete a prompt override. Empty / None prompt removes the row."""
+        async with self._sf() as s:
+            row = await s.get(InsightUserPrompt, (user_id, command))
+            if not prompt or not prompt.strip():
+                if row is not None:
+                    await s.delete(row)
+                    await s.commit()
+                return
+            user = await s.get(User, user_id)
+            if user is None:
+                user = User(id=user_id)
+                s.add(user)
+                await s.flush()
+            if row is None:
+                row = InsightUserPrompt(user_id=user_id, command=command, prompt=prompt.strip())
+                s.add(row)
+            else:
+                row.prompt = prompt.strip()
+                row.updated_at = datetime.now(timezone.utc)
+            await s.commit()
 
 
 class InsightAccessRepo:
@@ -241,6 +312,9 @@ class InsightUsageLogRepo:
         lang: str = "en",
         status: str = "ok",
         error_code: str | None = None,
+        alias_key: str | None = None,
+        content_chars: int | None = None,
+        video_seconds: int | None = None,
     ) -> None:
         async with self._sf() as s:
             s.add(InsightUsageLog(
@@ -250,6 +324,9 @@ class InsightUsageLogRepo:
                 lang=lang,
                 status=status,
                 error_code=error_code,
+                alias_key=alias_key,
+                content_chars=content_chars,
+                video_seconds=video_seconds,
             ))
             await s.commit()
 
@@ -334,4 +411,132 @@ class InsightUsageLogRepo:
             "today": today,
             "by_command": by_command,
             "by_day": by_day,
+        }
+
+    # ------------------------------------------------------------------
+    # TLDR-specific stats
+    # ------------------------------------------------------------------
+    #
+    # Time-saved formulas (see api/router.get_my_insight_stats):
+    #   YouTube row with video_seconds NOT NULL  -> seconds / 60
+    #   YouTube row with video_seconds NULL      -> content_chars-based reading
+    #                                              estimate (transcript words)
+    #   Web row (video_seconds always NULL)      -> content_chars / 1000 minutes
+    #                                              (~200 wpm * ~5 chars per word)
+    async def tldr_stats_for_user(self, user_id: int) -> dict:
+        """Aggregate TLDR-specific stats for a single user.
+
+        Rows where command='tldr' OR command LIKE 'tldr:%' are considered.
+        Only status IN ('ok', 'cached') is counted (errors don't "save time").
+        """
+        from datetime import timedelta
+        from sqlalchemy import Date, cast, or_
+
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = today_start - timedelta(days=today_start.weekday())
+        thirty_days_ago = now - timedelta(days=30)
+
+        tldr_filter = or_(
+            InsightUsageLog.command == "tldr",
+            InsightUsageLog.command.like("tldr:%"),
+        )
+        ok_status = InsightUsageLog.status.in_(("ok", "cached"))
+
+        async with self._sf() as s:
+            base = select(func.count()).select_from(InsightUsageLog).where(
+                InsightUsageLog.user_id == user_id,
+                tldr_filter,
+                ok_status,
+            )
+            total = (await s.execute(base)).scalar() or 0
+            this_week = (await s.execute(
+                base.where(InsightUsageLog.created_at >= week_start)
+            )).scalar() or 0
+            today = (await s.execute(
+                base.where(InsightUsageLog.created_at >= today_start)
+            )).scalar() or 0
+
+            # By alias breakdown (alias_key NULL -> bucket "_none")
+            alias_rows = (await s.execute(
+                select(InsightUsageLog.alias_key, func.count())
+                .where(
+                    InsightUsageLog.user_id == user_id,
+                    tldr_filter,
+                    ok_status,
+                )
+                .group_by(InsightUsageLog.alias_key)
+            )).all()
+            by_alias = [
+                {"alias": row[0] or "_none", "count": row[1]}
+                for row in alias_rows
+            ]
+            by_alias.sort(key=lambda r: r["count"], reverse=True)
+
+            # By kind: youtube (video_seconds NOT NULL) vs web
+            yt_count = (await s.execute(
+                base.where(InsightUsageLog.video_seconds.is_not(None))
+            )).scalar() or 0
+            web_count = total - yt_count
+
+            # Aggregate seconds + chars buckets
+            sums = (await s.execute(
+                select(
+                    func.coalesce(func.sum(InsightUsageLog.video_seconds), 0),
+                    func.coalesce(
+                        func.sum(
+                            sa_case((InsightUsageLog.video_seconds.is_(None), InsightUsageLog.content_chars), else_=0)
+                        ),
+                        0,
+                    ),
+                ).where(
+                    InsightUsageLog.user_id == user_id,
+                    tldr_filter,
+                    ok_status,
+                )
+            )).one()
+            total_video_seconds = int(sums[0] or 0)
+            total_web_chars = int(sums[1] or 0)
+
+            # Daily history (last 30 days) - count + summed metrics
+            day_rows = (await s.execute(
+                select(
+                    cast(InsightUsageLog.created_at, Date).label("date"),
+                    func.count().label("count"),
+                    func.coalesce(func.sum(InsightUsageLog.video_seconds), 0).label("video_seconds"),
+                    func.coalesce(
+                        func.sum(
+                            sa_case((InsightUsageLog.video_seconds.is_(None), InsightUsageLog.content_chars), else_=0)
+                        ),
+                        0,
+                    ).label("web_chars"),
+                )
+                .where(
+                    InsightUsageLog.user_id == user_id,
+                    tldr_filter,
+                    ok_status,
+                    InsightUsageLog.created_at >= thirty_days_ago,
+                )
+                .group_by("date")
+                .order_by("date")
+            )).all()
+            by_day = [
+                {
+                    "date": str(row[0]),
+                    "count": row[1],
+                    "video_seconds": int(row[2] or 0),
+                    "web_chars": int(row[3] or 0),
+                }
+                for row in day_rows
+            ]
+
+        return {
+            "total": total,
+            "this_week": this_week,
+            "today": today,
+            "by_alias": by_alias,
+            "by_kind": {"youtube": yt_count, "web": web_count},
+            "by_day": by_day,
+            "total_video_seconds": total_video_seconds,
+            "total_web_chars": total_web_chars,
         }
