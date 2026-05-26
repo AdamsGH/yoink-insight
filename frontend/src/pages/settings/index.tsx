@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useGetIdentity } from '@refinedev/core'
-import { BrainCircuit, Link, LockKeyhole, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { BrainCircuit, ChevronDown, FileText, Link, LockKeyhole, MessageCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
 
-import { insightApi, type InsightSettings, type TldrAlias } from '@insight/api/insight'
+import { insightApi, type InsightSettings, type InsightSettingsPatch, type TldrAlias, type TldrAliasInput } from '@insight/api/insight'
 import { formatDate } from '@core/lib/utils'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle,
+  Collapsible, CollapsibleContent, CollapsibleTrigger,
   Dialog, DialogActions, DialogContent, DialogHeader, DialogTitle,
-  Input, Label,
+  Field, FieldDescription, FieldLabel,
+  Input, Label, Switch, Textarea,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList,
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -23,9 +25,15 @@ const LANG_OPTIONS = [
 
 const BUILTIN_ALIASES = ['max', 'nobullshit', 'noshit']
 
-const BUILTIN_ALIAS_DEFS = [
-  { aliases: ['max'], desc: 'Thorough breakdown: all key points, technical details, bold headings.' },
-  { aliases: ['nobullshit', 'noshit'], desc: 'Cynical critic: one-line verdict, max 7 concrete bullets, calls out hype.' },
+interface BuiltinAliasDef {
+  aliases: string[]
+  target: string  // primary alias name used as target_alias
+  desc: string
+}
+
+const BUILTIN_ALIAS_DEFS: BuiltinAliasDef[] = [
+  { aliases: ['max'], target: 'max', desc: 'Thorough breakdown: all key points, technical details, bold headings.' },
+  { aliases: ['nobullshit', 'noshit'], target: 'nobullshit', desc: 'Cynical critic: one-line verdict, max 7 concrete bullets, calls out hype.' },
 ]
 
 // ---- Tag input ----
@@ -108,6 +116,8 @@ function TagInput({
 
 // ---- Alias dialog ----
 
+const DOMAIN_HINT = 'e.g. xda-developers.com, *.lwn.net, github.com/*'
+
 function AliasDialog({
   open,
   initial,
@@ -117,28 +127,35 @@ function AliasDialog({
   open: boolean
   initial?: TldrAlias
   onClose: () => void
-  onSubmit: (aliases: string, prompt: string) => Promise<void>
+  onSubmit: (body: TldrAliasInput) => Promise<void>
 }) {
   const { t } = useTranslation()
   const [tags, setTags] = useState<string[]>([])
+  const [domains, setDomains] = useState<string[]>([])
   const [prompt, setPrompt] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (open) {
       setTags(initial?.aliases ? initial.aliases.split(',').map(s => s.trim()).filter(Boolean) : [])
+      setDomains(initial?.domains ? initial.domains.split(',').map(s => s.trim()).filter(Boolean) : [])
       setPrompt(initial?.prompt ?? '')
     }
   }, [open, initial])
 
-  const builtinConflicts = tags.filter(t => BUILTIN_ALIASES.includes(t))
+  const builtinConflicts = tags.filter(tag => BUILTIN_ALIASES.includes(tag))
   const canSave = tags.length > 0 && prompt.trim().length > 0 && builtinConflicts.length === 0 && !saving
 
   const handleSubmit = async () => {
     if (!canSave) return
     setSaving(true)
     try {
-      await onSubmit(tags.join(', '), prompt.trim())
+      await onSubmit({
+        aliases: tags.join(', '),
+        prompt: prompt.trim(),
+        domains: domains.length > 0 ? domains.join(', ') : null,
+        target_alias: null,
+      })
       onClose()
     } catch {
       // error handled by parent
@@ -175,14 +192,22 @@ function AliasDialog({
               {t('insight.alias_field_hint', { defaultValue: 'Type and press comma or Enter to add. Each word triggers the same prompt.' })}
             </p>
           </div>
-          <div className="space-y-1.5">
-            <Label>{t('insight.alias_prompt_field', { defaultValue: 'Prompt instruction' })}</Label>
-            <textarea
-              className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+          <Field>
+            <FieldLabel htmlFor="alias-prompt">{t('insight.alias_prompt_field', { defaultValue: 'Prompt instruction' })}</FieldLabel>
+            <Textarea
+              id="alias-prompt"
+              className="min-h-[80px] resize-none text-sm"
               placeholder={t('insight.alias_prompt_placeholder', { defaultValue: 'e.g. Focus on technical details and code examples.' })}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
             />
+          </Field>
+          <div className="space-y-1.5">
+            <Label>{t('insight.alias_domains_field', { defaultValue: 'Auto-apply on domains (optional)' })}</Label>
+            <TagInput tags={domains} onChange={setDomains} placeholder={DOMAIN_HINT} />
+            <p className="text-xs text-muted-foreground">
+              {t('insight.alias_domains_hint', { defaultValue: 'Matched against host[/path]. Use * as a glob: xda-developers.com/*, *.lwn.net.' })}
+            </p>
           </div>
         </div>
         <DialogActions>
@@ -193,6 +218,188 @@ function AliasDialog({
         </DialogActions>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ---- Built-in domain binding dialog ----
+
+function BuiltinBindDialog({
+  open,
+  def,
+  existingRow,
+  fullPrompt,
+  onClose,
+  onSubmit,
+  onDelete,
+}: {
+  open: boolean
+  def: BuiltinAliasDef | null
+  existingRow?: TldrAlias
+  fullPrompt?: string
+  onClose: () => void
+  onSubmit: (body: TldrAliasInput, existingId: number | null) => Promise<void>
+  onDelete?: (id: number) => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const [domains, setDomains] = useState<string[]>([])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      setDomains(existingRow?.domains ? existingRow.domains.split(',').map(s => s.trim()).filter(Boolean) : [])
+    }
+  }, [open, existingRow])
+
+  if (!def) return null
+
+  const handleSubmit = async () => {
+    if (domains.length === 0) return
+    setSaving(true)
+    try {
+      await onSubmit({
+        target_alias: def.target,
+        domains: domains.join(', '),
+        aliases: null,
+        prompt: null,
+      }, existingRow?.id ?? null)
+      onClose()
+    } catch {
+      // error handled by parent
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!existingRow || !onDelete) return
+    setSaving(true)
+    try {
+      await onDelete(existingRow.id)
+      onClose()
+    } catch {
+      // error handled by parent
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>
+            <span>{t('insight.builtin_bind_title', { defaultValue: 'Bind domains to' })}</span>{' '}
+            <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-sm text-secondary-foreground">
+              {def.target}
+            </span>
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <pre className="max-h-60 overflow-y-auto rounded-md border bg-muted px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+            <code>{fullPrompt && fullPrompt.trim().length > 0 ? fullPrompt : def.desc}</code>
+          </pre>
+          <div className="space-y-1.5">
+            <Label>{t('insight.alias_domains_field', { defaultValue: 'Auto-apply on domains' })}</Label>
+            <TagInput tags={domains} onChange={setDomains} placeholder={DOMAIN_HINT} autoFocus />
+            <p className="text-xs text-muted-foreground">
+              {t('insight.alias_domains_hint', { defaultValue: 'Matched against host[/path]. Use * as a glob: xda-developers.com/*, *.lwn.net.' })}
+            </p>
+          </div>
+        </div>
+        <DialogActions>
+          {existingRow && onDelete ? (
+            <Button variant="outline" className="flex-1 text-destructive" onClick={handleDelete} disabled={saving}>
+              {t('common.delete')}
+            </Button>
+          ) : (
+            <Button variant="outline" className="flex-1" onClick={onClose} disabled={saving}>{t('common.cancel')}</Button>
+          )}
+          <Button className="flex-1" onClick={handleSubmit} disabled={domains.length === 0 || saving}>
+            {saving ? t('common.loading') : t('common.save')}
+          </Button>
+        </DialogActions>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---- Prompt editor ----
+
+function PromptEditor({
+  command,
+  icon,
+  label,
+  description,
+  serverValue,
+  defaultValue,
+  edit,
+  onChange,
+}: {
+  command: string
+  icon: React.ReactNode
+  label: string
+  description?: string
+  serverValue: string  // current override on server ('' if none)
+  defaultValue: string  // built-in instruction
+  edit: string | null  // null = unchanged in this session; string (incl. '') = local edit
+  onChange: (value: string | null) => void
+}) {
+  const { t } = useTranslation()
+  const fieldId = `prompt-${command}`
+  const isOverridden = serverValue.trim().length > 0
+  const displayValue = edit !== null ? edit : serverValue
+  const isCustomNow = (edit ?? serverValue).trim().length > 0
+  // Auto-expand when the user has a non-default prompt - they're more
+  // likely to want to peek/edit it; defaults stay collapsed.
+  const [open, setOpen] = useState(isCustomNow)
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <Field>
+        <div className="flex items-center justify-between gap-2">
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="flex items-center gap-1.5 text-left hover:text-foreground transition-colors"
+            >
+              <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`} />
+              <span className="text-muted-foreground">{icon}</span>
+              <span className="font-mono text-xs">{label}</span>
+              {isCustomNow && (
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{t('insight.prompt_custom', { defaultValue: 'custom' })}</Badge>
+              )}
+            </button>
+          </CollapsibleTrigger>
+          {isCustomNow && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+                  onClick={() => onChange(isOverridden ? '' : null)}
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" />
+                  {t('insight.prompt_reset', { defaultValue: 'reset' })}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{t('insight.prompt_reset_hint', { defaultValue: 'Restore the built-in default on save.' })}</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+        <CollapsibleContent className="mt-1.5 space-y-1.5">
+          {description && <FieldDescription>{description}</FieldDescription>}
+          <Textarea
+            id={fieldId}
+            className="h-[400px] resize-none font-mono text-xs leading-relaxed"
+            placeholder={defaultValue}
+            value={displayValue}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        </CollapsibleContent>
+      </Field>
+    </Collapsible>
   )
 }
 
@@ -217,6 +424,17 @@ export default function InsightSettingsPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [aliasDialogOpen, setAliasDialogOpen] = useState(false)
   const [editAlias, setEditAlias] = useState<TldrAlias | undefined>(undefined)
+  const [bindDialogDef, setBindDialogDef] = useState<BuiltinAliasDef | null>(null)
+
+  const [useSearch, setUseSearch] = useState<boolean | null>(null)
+  // Local edits to prompt overrides. null = unchanged from server; '' (empty)
+  // = user explicitly reset to default; non-empty = user-edited prompt.
+  const [promptEdits, setPromptEdits] = useState<Record<string, string | null>>({})
+
+  // Split rows: custom-alias rows (have keywords) vs pure domain-binding rows for built-ins.
+  const builtinBindings = aliases.filter(a => a.target_alias && !a.aliases)
+  const customAliases = aliases.filter(a => a.aliases)
+  const bindingFor = (target: string) => builtinBindings.find(a => a.target_alias === target)
 
   const loadModels = async () => {
     setLoadingModels(true)
@@ -246,6 +464,8 @@ export default function InsightSettingsPage() {
         setLang(res.data.lang)
         setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
         setGithubToken('')
+        setUseSearch(res.data.use_search)
+        setPromptEdits({})
         if (res.data.has_tldr_access) {
           if (identity?.role === 'owner') {
             loadModels()
@@ -263,7 +483,7 @@ export default function InsightSettingsPage() {
   const save = async () => {
     setSaving(true)
     try {
-      const body: { lang?: string; tldr_model?: string | null; github_token?: string | null } = { lang: lang ?? data?.lang }
+      const body: InsightSettingsPatch = { lang: lang ?? data?.lang }
       if (data?.has_tldr_access) {
         body.tldr_model = tldrModel ?? data?.tldr_model ?? null
         if (githubToken === '__clear__') {
@@ -272,11 +492,26 @@ export default function InsightSettingsPage() {
           body.github_token = githubToken
         }
       }
+      if (data?.has_search_access && useSearch !== null && useSearch !== data.use_search) {
+        body.use_search = useSearch
+      }
+      // Only send prompts that were touched in this session. Empty string =
+      // explicit reset; non-empty = update; missing key = leave as-is.
+      const promptsBody: Record<string, string | null> = {}
+      for (const [cmd, val] of Object.entries(promptEdits)) {
+        if (val === null) continue
+        promptsBody[cmd] = val
+      }
+      if (Object.keys(promptsBody).length > 0) {
+        body.prompts = promptsBody
+      }
       const res = await insightApi.patchSettings(body)
       setData(res.data)
       setLang(res.data.lang)
       setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
       setGithubToken('')
+      setUseSearch(res.data.use_search)
+      setPromptEdits({})
       toast.success(t('common.saved'))
     } catch {
       toast.error(t('common.load_error'))
@@ -285,9 +520,9 @@ export default function InsightSettingsPage() {
     }
   }
 
-  const handleCreateAlias = async (aliases: string, prompt: string) => {
+  const handleCreateAlias = async (body: TldrAliasInput) => {
     try {
-      await insightApi.createAlias(aliases, prompt)
+      await insightApi.createAlias(body)
       toast.success(t('common.saved'))
       loadAliases()
     } catch (err: unknown) {
@@ -297,11 +532,39 @@ export default function InsightSettingsPage() {
     }
   }
 
-  const handleUpdateAlias = async (aliases: string, prompt: string) => {
+  const handleUpdateAlias = async (body: TldrAliasInput) => {
     if (!editAlias) return
     try {
-      await insightApi.updateAlias(editAlias.id, aliases, prompt)
+      await insightApi.updateAlias(editAlias.id, body)
       toast.success(t('common.saved'))
+      loadAliases()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      toast.error(detail ?? t('common.load_error'))
+      throw err
+    }
+  }
+
+  const handleBuiltinBindSubmit = async (body: TldrAliasInput, existingId: number | null) => {
+    try {
+      if (existingId !== null) {
+        await insightApi.updateAlias(existingId, body)
+      } else {
+        await insightApi.createAlias(body)
+      }
+      toast.success(t('common.saved'))
+      loadAliases()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      toast.error(detail ?? t('common.load_error'))
+      throw err
+    }
+  }
+
+  const handleBuiltinBindDelete = async (id: number) => {
+    try {
+      await insightApi.deleteAlias(id)
+      toast.success(t('common.deleted', { defaultValue: 'Deleted' }))
       loadAliases()
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -330,7 +593,9 @@ export default function InsightSettingsPage() {
   const langDirty = data !== null && lang !== null && lang !== data.lang
   const tldrDirty = data !== null && data.has_tldr_access && tldrModel !== null && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
   const githubDirty = data !== null && data.has_tldr_access && githubToken !== ''
-  const dirty = langDirty || tldrDirty || githubDirty
+  const searchDirty = data !== null && data.has_search_access && useSearch !== null && useSearch !== data.use_search
+  const promptsDirty = Object.values(promptEdits).some(v => v !== null)
+  const dirty = langDirty || tldrDirty || githubDirty || searchDirty || promptsDirty
 
   const modelList = isOwner ? allModels : (data?.tldr_allowed_models ?? [])
 
@@ -382,6 +647,37 @@ export default function InsightSettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* AI Tools: per-user web search override */}
+        {data?.has_search_access && (
+          <Card>
+            <CardHeader className="px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Search className="h-4 w-4 shrink-0 text-primary" />
+                  {t('insight.search_title', { defaultValue: 'AI Tools' })}
+                </CardTitle>
+                <span className="text-xs font-medium text-primary">
+                  {t('insight.search_active_short', { defaultValue: 'available' })}
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent className="px-4 pb-3">
+              <div className="flex items-center justify-between gap-3 py-1">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm leading-snug">{t('insight.search_toggle_label', { defaultValue: 'Use web search engine' })}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground leading-snug">
+                    {t('insight.search_toggle_hint', { defaultValue: 'Route /tldr, /summary and /about through the gateway answer engine. Better at scraping GitHub, Reddit, StackOverflow; can also resolve non-URL queries via web search.' })}
+                  </p>
+                </div>
+                <Switch
+                  checked={useSearch ?? data.use_search}
+                  onCheckedChange={setUseSearch}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* TL;DR */}
         <Card>
@@ -488,6 +784,59 @@ export default function InsightSettingsPage() {
           </Button>
         )}
 
+        {/* Default Prompts */}
+        {data && (data.has_gemini_access || data.has_tldr_access) && (
+          <Card>
+            <CardHeader className="px-4 py-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <FileText className="h-4 w-4 shrink-0 text-primary" />
+                {t('insight.prompts_title', { defaultValue: 'Default Prompts' })}
+              </CardTitle>
+              <p className="text-xs text-muted-foreground leading-snug">
+                {t('insight.prompts_hint', { defaultValue: 'Replace the built-in instruction for each command. Empty = use the default.' })}
+              </p>
+            </CardHeader>
+            <CardContent className="px-4 pb-3 space-y-3">
+              {data.has_gemini_access && (
+                <PromptEditor
+                  command="summary"
+                  icon={<FileText className="h-3.5 w-3.5" />}
+                  label={t('insight.prompt_summary_label', { defaultValue: '/summary' })}
+                  description={t('insight.prompt_summary_desc', { defaultValue: 'Bullet-list summary of a YouTube video.' })}
+                  serverValue={data.prompts.summary ?? ''}
+                  defaultValue={data.prompt_defaults.summary ?? ''}
+                  edit={promptEdits.summary ?? null}
+                  onChange={(v) => setPromptEdits(prev => ({ ...prev, summary: v }))}
+                />
+              )}
+              {data.has_gemini_access && (
+                <PromptEditor
+                  command="about"
+                  icon={<MessageCircle className="h-3.5 w-3.5" />}
+                  label={t('insight.prompt_about_label', { defaultValue: '/about' })}
+                  description={t('insight.prompt_about_desc', { defaultValue: 'Short 2-3 sentence pitch of a YouTube video.' })}
+                  serverValue={data.prompts.about ?? ''}
+                  defaultValue={data.prompt_defaults.about ?? ''}
+                  edit={promptEdits.about ?? null}
+                  onChange={(v) => setPromptEdits(prev => ({ ...prev, about: v }))}
+                />
+              )}
+              {data.has_tldr_access && (
+                <PromptEditor
+                  command="tldr"
+                  icon={<Link className="h-3.5 w-3.5" />}
+                  label={t('insight.prompt_tldr_label', { defaultValue: '/tldr (default)' })}
+                  description={t('insight.prompt_tldr_desc', { defaultValue: 'Default for /tldr without alias or question. Aliases stay independent.' })}
+                  serverValue={data.prompts.tldr ?? ''}
+                  defaultValue={data.prompt_defaults.tldr ?? ''}
+                  edit={promptEdits.tldr ?? null}
+                  onChange={(v) => setPromptEdits(prev => ({ ...prev, tldr: v }))}
+                />
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Aliases */}
         {data?.has_tldr_access && (
           <Card>
@@ -508,65 +857,97 @@ export default function InsightSettingsPage() {
             </CardHeader>
             <CardContent className="p-0 pb-2">
               <div className="divide-y divide-border">
-                {BUILTIN_ALIAS_DEFS.map((def) => (
-                  <div key={def.aliases[0]} className="flex items-start gap-3 px-4 py-2.5">
-                    <div className="flex-1 min-w-0 space-y-0.5">
-                      <div className="flex flex-wrap gap-1">
-                        {def.aliases.map(tag => (
-                          <Badge key={tag} variant="outline" className="font-mono text-xs px-1.5 py-0 text-muted-foreground">{tag}</Badge>
-                        ))}
-                        <span className="text-[10px] text-muted-foreground/50 self-center">built-in</span>
+                {BUILTIN_ALIAS_DEFS.map((def) => {
+                  const binding = bindingFor(def.target)
+                  const boundDomains = binding?.domains?.split(',').map(s => s.trim()).filter(Boolean) ?? []
+                  return (
+                    <div key={def.target} className="flex items-start gap-3 px-4 py-2.5">
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex flex-wrap gap-1">
+                          {def.aliases.map(tag => (
+                            <Badge key={tag} variant="outline" className="font-mono text-xs px-1.5 py-0 text-muted-foreground">{tag}</Badge>
+                          ))}
+                          <span className="text-[10px] text-muted-foreground/50 self-center">built-in</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground line-clamp-2">{def.desc}</p>
+                        {boundDomains.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {boundDomains.map(d => (
+                              <Badge key={d} variant="secondary" className="font-mono text-[10px] px-1.5 py-0">{d}</Badge>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <p className="text-xs text-muted-foreground line-clamp-2">{def.desc}</p>
+                      <div className="flex gap-1 shrink-0 pt-0.5">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setBindDialogDef(def)}>
+                              <Link className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('insight.builtin_bind_title', { defaultValue: 'Bind domains to' })} {def.target}</TooltipContent>
+                        </Tooltip>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
               {loadingAliases ? (
                 <div className="px-4 py-3 text-xs text-muted-foreground border-t border-border">{t('common.loading')}</div>
-              ) : aliases.length === 0 ? (
+              ) : customAliases.length === 0 ? (
                 <div className="px-4 py-3 text-center text-xs text-muted-foreground border-t border-border">
                   {t('insight.aliases_empty', { defaultValue: 'No custom aliases yet.' })}
                 </div>
               ) : (
                 <div className="divide-y divide-border border-t border-border">
-                  {aliases.map((a) => (
-                    <div key={a.id} className="flex items-start gap-3 px-4 py-3">
-                      <div className="flex-1 min-w-0 space-y-0.5">
-                        <div className="flex flex-wrap gap-1">
-                          {a.aliases.split(',').map(s => s.trim()).filter(Boolean).map(tag => (
-                            <Badge key={tag} variant="secondary" className="font-mono text-xs px-1.5 py-0">{tag}</Badge>
-                          ))}
+                  {customAliases.map((a) => {
+                    const aliasTags = a.aliases?.split(',').map(s => s.trim()).filter(Boolean) ?? []
+                    const domainTags = a.domains?.split(',').map(s => s.trim()).filter(Boolean) ?? []
+                    return (
+                      <div key={a.id} className="flex items-start gap-3 px-4 py-3">
+                        <div className="flex-1 min-w-0 space-y-0.5">
+                          <div className="flex flex-wrap gap-1">
+                            {aliasTags.map(tag => (
+                              <Badge key={tag} variant="secondary" className="font-mono text-xs px-1.5 py-0">{tag}</Badge>
+                            ))}
+                          </div>
+                          {a.prompt && <p className="text-xs text-muted-foreground line-clamp-2">{a.prompt}</p>}
+                          {domainTags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {domainTags.map(d => (
+                                <Badge key={d} variant="outline" className="font-mono text-[10px] px-1.5 py-0 text-muted-foreground">{d}</Badge>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-xs text-muted-foreground/60">{formatDate(a.created_at)}</p>
                         </div>
-                        <p className="text-xs text-muted-foreground line-clamp-2">{a.prompt}</p>
-                        <p className="text-xs text-muted-foreground/60">{formatDate(a.created_at)}</p>
+                        <div className="flex gap-1 shrink-0 pt-0.5">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setEditAlias(a); setAliasDialogOpen(true) }}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('common.edit')}</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                disabled={deletingId === a.id}
+                                onClick={() => handleDeleteAlias(a)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t('common.delete')}</TooltipContent>
+                          </Tooltip>
+                        </div>
                       </div>
-                      <div className="flex gap-1 shrink-0 pt-0.5">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => { setEditAlias(a); setAliasDialogOpen(true) }}>
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>{t('common.edit')}</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                              disabled={deletingId === a.id}
-                              onClick={() => handleDeleteAlias(a)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>{t('common.delete')}</TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </CardContent>
@@ -578,6 +959,15 @@ export default function InsightSettingsPage() {
           initial={editAlias}
           onClose={() => { setAliasDialogOpen(false); setEditAlias(undefined) }}
           onSubmit={editAlias ? handleUpdateAlias : handleCreateAlias}
+        />
+        <BuiltinBindDialog
+          open={bindDialogDef !== null}
+          def={bindDialogDef}
+          existingRow={bindDialogDef ? bindingFor(bindDialogDef.target) : undefined}
+          fullPrompt={bindDialogDef ? data?.alias_defaults?.[bindDialogDef.target] : undefined}
+          onClose={() => setBindDialogDef(null)}
+          onSubmit={handleBuiltinBindSubmit}
+          onDelete={handleBuiltinBindDelete}
         />
       </div>
     </TooltipProvider>

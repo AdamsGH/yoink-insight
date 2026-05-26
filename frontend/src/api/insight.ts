@@ -5,9 +5,22 @@ export interface InsightSettings {
   lang: string
   has_gemini_access: boolean
   has_tldr_access: boolean
+  has_search_access: boolean
   tldr_model: string | null
   tldr_allowed_models: string[]
+  use_search: boolean
+  prompts: Record<string, string>
+  prompt_defaults: Record<string, string>
+  alias_defaults: Record<string, string>
   granted_at?: string | null
+}
+
+export interface InsightSettingsPatch {
+  lang?: string
+  tldr_model?: string | null
+  github_token?: string | null
+  use_search?: boolean
+  prompts?: Record<string, string | null>
 }
 
 export interface TldrConfig {
@@ -24,16 +37,25 @@ export interface GatewayModel {
 
 export interface TldrAlias {
   id: number
-  aliases: string
-  prompt: string
+  aliases: string | null
+  prompt: string | null
+  domains: string | null
+  target_alias: string | null
   created_at: string
+}
+
+export interface TldrAliasInput {
+  aliases?: string | null
+  prompt?: string | null
+  domains?: string | null
+  target_alias?: string | null
 }
 
 export const insightApi = {
   getSettings: () =>
     apiClient.get<InsightSettings>('/insight/settings/me'),
 
-  patchSettings: (body: { lang?: string; tldr_model?: string | null; github_token?: string | null }) =>
+  patchSettings: (body: InsightSettingsPatch) =>
     apiClient.patch<InsightSettings>('/insight/settings/me', body),
 
   getTldrConfig: () =>
@@ -58,11 +80,11 @@ export const insightApi = {
   listAliases: () =>
     apiClient.get<TldrAlias[]>('/insight/aliases'),
 
-  createAlias: (aliases: string, prompt: string) =>
-    apiClient.post<TldrAlias>('/insight/aliases', { aliases, prompt }),
+  createAlias: (body: TldrAliasInput) =>
+    apiClient.post<TldrAlias>('/insight/aliases', body),
 
-  updateAlias: (id: number, aliases: string, prompt: string) =>
-    apiClient.patch<TldrAlias>(`/insight/aliases/${id}`, { aliases, prompt }),
+  updateAlias: (id: number, body: TldrAliasInput) =>
+    apiClient.patch<TldrAlias>(`/insight/aliases/${id}`, body),
 
   deleteAlias: (id: number) =>
     apiClient.delete(`/insight/aliases/${id}`),
