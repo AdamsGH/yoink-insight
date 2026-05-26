@@ -51,6 +51,62 @@ export interface TldrAliasInput {
   target_alias?: string | null
 }
 
+// ---------------------------------------------------------------------------
+// BYOK (Bring Your Own Key)
+// ---------------------------------------------------------------------------
+
+export interface ByokModelInfo {
+  id: string
+  supports_websearch: boolean
+}
+
+export interface ByokProviderInfo {
+  id: string
+  label: string
+  default_base_url: string | null
+  requires_base_url: boolean
+  api_shape: 'openai' | 'anthropic'
+  all_websearch: boolean
+}
+
+export interface ByokConfig {
+  enabled: boolean
+  has_config: boolean
+  api_key_set: boolean
+  api_key_masked: string | null
+  provider: string | null
+  base_url: string | null
+  model: string | null
+  models: ByokModelInfo[]
+  models_fetched_at: string | null
+  tested_at: string | null
+  test_error: string | null
+  providers: ByokProviderInfo[]
+}
+
+export interface ByokConfigUpdate {
+  provider: string
+  base_url?: string | null
+  api_key?: string | null
+  model: string
+}
+
+export interface ByokTestRequest {
+  provider: string
+  base_url?: string | null
+  api_key?: string | null
+}
+
+export interface ByokTestResponse {
+  ok: boolean
+  error: string | null
+  models: ByokModelInfo[]
+}
+
+export interface ByokAdminConfig {
+  enabled: boolean
+}
+
 export const insightApi = {
   getSettings: () =>
     apiClient.get<InsightSettings>('/insight/settings/me'),
@@ -88,4 +144,26 @@ export const insightApi = {
 
   deleteAlias: (id: number) =>
     apiClient.delete(`/insight/aliases/${id}`),
+
+  // BYOK
+  getByok: () =>
+    apiClient.get<ByokConfig>('/insight/byok/me'),
+
+  saveByok: (body: ByokConfigUpdate) =>
+    apiClient.put<ByokConfig>('/insight/byok/me', body),
+
+  deleteByok: () =>
+    apiClient.delete('/insight/byok/me'),
+
+  testByok: (body: ByokTestRequest) =>
+    apiClient.post<ByokTestResponse>('/insight/byok/me/test', body),
+
+  refreshByokModels: () =>
+    apiClient.post<ByokConfig>('/insight/byok/me/refresh-models'),
+
+  getByokAdmin: () =>
+    apiClient.get<ByokAdminConfig>('/insight/config/byok'),
+
+  setByokAdmin: (body: ByokAdminConfig) =>
+    apiClient.patch<ByokAdminConfig>('/insight/config/byok', body),
 }

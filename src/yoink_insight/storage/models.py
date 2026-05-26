@@ -118,6 +118,47 @@ class InsightTldrAlias(Base):
     )
 
 
+class InsightUserByok(Base):
+    """Per-user Bring-Your-Own-Key configuration for /tldr.
+
+    Lets users without the insight:tldr grant call /tldr against their own
+    OpenAI/Anthropic/Gemini/OpenRouter/Perplexity (or custom-compat) endpoint.
+    The admin tumbler bot_settings.insight_byok_enabled gates the whole
+    feature.
+
+    provider is one of: openai, anthropic, gemini, openrouter, perplexity,
+    custom_openai, custom_anthropic. base_url is required only for custom_*.
+    models_json is the cached provider model catalogue (list[dict] with
+    {id, supports_websearch}), refreshed on demand. tested_at/test_error
+    record the last connectivity probe.
+    """
+    __tablename__ = "insight_user_byok"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    models_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    models_fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    tested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    test_error: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+
+
 class InsightUsageLog(Base):
     """Tracks every /summary and /about invocation."""
     __tablename__ = "insight_usage_log"

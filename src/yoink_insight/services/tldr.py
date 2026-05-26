@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import httpx
 
 from yoink_insight.config import InsightConfig
+from yoink_insight.services.byok import BYOKError, resolve_base_url, stream_chat as byok_stream_chat
 from yoink_insight.services.fetch import FetchResult, _FetchError, fetch_web_content
 from yoink_insight.services.search_client import SearchFetchError, join_sources_for_llm, search_fetch
 
@@ -382,6 +383,19 @@ async def prepare_tldr(
     )
 
 
+@dataclass
+class ByokRoute:
+    """Inputs for routing /tldr through a user-owned provider instead of the gateway.
+
+    provider/base_url/api_key/model come straight from insight_user_byok.
+    When present, stream_llm bypasses the gateway entirely.
+    """
+    provider: str
+    base_url: str | None
+    api_key: str
+    model: str
+
+
 async def stream_llm(
     prepared: PreparedTldr,
     lang: str,
@@ -391,6 +405,7 @@ async def stream_llm(
     model: str | None = None,
     entries: list[UserAliasEntry] | None = None,
     default_instruction_override: str | None = None,
+    byok: ByokRoute | None = None,
 ):
     """Stream LLM summary chunks for an already-prepared content blob.
 
@@ -400,6 +415,9 @@ async def stream_llm(
     prompt is used; otherwise the free-text question (if any) drives the
     question-style prompt. default_instruction_override only kicks in when
     no alias and no question are present - the user's custom TLDR default.
+
+    When byok is set the user-provided provider is called directly, bypassing
+    the gateway. The 'model' kwarg is ignored in that branch (byok.model wins).
     """
     resolved_question: str | None = None
     if alias_key:
@@ -410,6 +428,20 @@ async def stream_llm(
         prepared.content, prepared.source_desc, lang, resolved_question,
         instruction_override=default_instruction_override if not alias_key and not question else None,
     )
+
+    if byok is not None:
+        try:
+            base = resolve_base_url(byok.provider, byok.base_url)
+        except BYOKError as exc:
+            logger.error("BYOK base url resolution failed: %s", exc)
+            raise TldrError("llm_error") from exc
+        try:
+            async for delta in byok_stream_chat(byok.provider, base, byok.api_key, byok.model, prompt):
+                yield delta
+        except BYOKError as exc:
+            code = exc.args[0] if exc.args else "llm_error"
+            raise TldrError(code) from exc
+        return
 
     endpoint = config.gateway_base_url.rstrip("/") + "/v1/chat/completions"
     headers: dict[str, str] = {"Content-Type": "application/json"}

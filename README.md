@@ -74,6 +74,62 @@ Admins/owners define the list of models users can choose from and set the defaul
 
 Stored in `bot_settings` under keys `insight_tldr_allowed_models` (JSON array) and `insight_tldr_default_model`.
 
+## BYOK (Bring Your Own Key)
+
+When the admin flips `insight_byok_enabled` (BotSetting) to `true`, any authorised user can run `/tldr` against their own LLM endpoint, even without the `insight:tldr` grant. Configured per-user via the AI settings page (or `PUT /api/v1/insight/byok/me`).
+
+Supported providers:
+
+| id | default base_url | auth | notes |
+|---|---|---|---|
+| `openai` | `https://api.openai.com/v1` | `Authorization: Bearer` | live `/models` |
+| `anthropic` | `https://api.anthropic.com` | `x-api-key` + `anthropic-version: 2023-06-01` | live `/v1/models`; Messages API streaming, normalised to text deltas |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | `Authorization: Bearer` | OpenAI-compatible shim |
+| `openrouter` | `https://openrouter.ai/api/v1` | `Authorization: Bearer` | live `/models`; the `*:online` suffix marks websearch variants |
+| `perplexity` | `https://api.perplexity.ai` | `Authorization: Bearer` | hardcoded `sonar*` list; every model treated as websearch-capable |
+| `custom_openai` | user-supplied | `Authorization: Bearer` | any OpenAI-compatible endpoint |
+| `custom_anthropic` | user-supplied | `x-api-key` | any Anthropic-compatible endpoint |
+
+Web-search capability is detected by model id substrings (`sonar*`, `*:online`, `*-search-preview`, `perplexity/*`) plus `provider.all_websearch=True`. Models that match render with a soft emerald tint and a globe icon; picking a model without the marker triggers a confirmation dialog before save.
+
+The `/tldr` bot handler picks a path automatically:
+
+1. User has `insight:tldr` grant -> route through the gateway (same as today).
+2. No grant, BYOK enabled, user has a saved+probed config -> route through the user's provider directly, bypassing the gateway.
+3. Otherwise -> reply with `tldr.no_access`.
+
+### BYOK API
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/byok/me` | Current config (api_key masked) + provider catalogue |
+| PUT | `/byok/me` | Save provider + base_url + key + model; runs a probe + caches model list |
+| DELETE | `/byok/me` | Remove the user's config |
+| POST | `/byok/me/test` | Probe an arbitrary `{provider, base_url, api_key}` triple, returns models with websearch flag |
+| POST | `/byok/me/refresh-models` | Re-fetch the model list using the stored credentials |
+| GET | `/config/byok` | Admin: read global toggle |
+| PATCH | `/config/byok` | Admin: write global toggle (`{enabled: bool}`) |
+
+### Storage
+
+```sql
+insight_user_byok (
+    user_id            BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    provider           VARCHAR(32)  NOT NULL,
+    base_url           VARCHAR(512),
+    api_key            TEXT         NOT NULL,
+    model              VARCHAR(128) NOT NULL,
+    models_json        TEXT,
+    models_fetched_at  TIMESTAMPTZ,
+    tested_at          TIMESTAMPTZ,
+    test_error         VARCHAR(256),
+    created_at         TIMESTAMPTZ  NOT NULL,
+    updated_at         TIMESTAMPTZ  NOT NULL
+)
+```
+
+Keys are stored as plain text; protect the database accordingly. The admin toggle lives in `bot_settings(key='insight_byok_enabled')`.
+
 ## Configuration
 
 All variables come from `.env` via `InsightConfig(BaseSettings)`.
@@ -154,6 +210,7 @@ Single Alembic chain. Insight-relevant migrations:
 | 0033 | `insight_summary_cache` table |
 | 0035 | `insight_summary_cache.video_id` renamed to `content_key VARCHAR(512)` to support non-YouTube URLs |
 | 0036 | `insight_user_settings.tldr_model VARCHAR(128)` per-user LLM model override |
+| 0045 | `insight_user_byok` per-user Bring-Your-Own-Key configuration |
 
 ### Schema
 

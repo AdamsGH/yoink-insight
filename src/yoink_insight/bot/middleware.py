@@ -8,6 +8,7 @@ from yoink_insight.services.access import InsightAccessService
 from yoink_insight.storage.repos import (
     InsightAccessRepo,
     InsightUsageLogRepo,
+    InsightUserByokRepo,
     InsightUserPromptRepo,
     InsightUserSettingsRepo,
 )
@@ -35,6 +36,21 @@ def get_insight_usage_repo(context: ContextTypes.DEFAULT_TYPE) -> InsightUsageLo
 
 def get_insight_prompts_repo(context: ContextTypes.DEFAULT_TYPE) -> InsightUserPromptRepo:
     return context.bot_data["insight_prompts_repo"]
+
+
+def get_insight_byok_repo(context: ContextTypes.DEFAULT_TYPE) -> InsightUserByokRepo:
+    return context.bot_data["insight_byok_repo"]
+
+
+async def is_byok_enabled(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Read the global insight_byok_enabled tumbler from bot_settings."""
+    repo = context.bot_data.get("bot_settings_repo")
+    if repo is None:
+        return False
+    raw = await repo.get("insight_byok_enabled")
+    if not raw:
+        return False
+    return raw.lower() in ("1", "true", "yes", "on")
 
 
 def get_owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:

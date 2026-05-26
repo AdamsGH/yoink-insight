@@ -1,7 +1,7 @@
 commands:
   - {command: about,          description: "Describe a YouTube video",    scope: default, required_feature: "insight:summary"}
   - {command: summary,        description: "Summarize a YouTube video",   scope: default, required_feature: "insight:summary"}
-  - {command: tldr,           description: "Summarize any URL (+ max / nobullshit)", scope: default, required_feature: "insight:tldr"}
+  - {command: tldr,           description: "Summarize any URL (+ max / nobullshit)", scope: default}
   - {command: insight_lang,   description: "Set Insight language",        scope: private, required_feature: "insight:summary"}
   - {command: insight_grant,  description: "Grant Insight access",        scope: private, min_role: admin}
   - {command: insight_revoke, description: "Revoke Insight access",       scope: private, min_role: admin}
@@ -41,6 +41,7 @@ tldr:
   header: "🔗 Summary"
   header_nobullshit: "🔗 No BS"
   no_url: "Please provide a URL. Usage: /tldr <url> [question]"
+  no_access: "You don't have access to /tldr. Ask an admin for a TLDR grant, or bring your own LLM key in AI settings if BYOK is enabled."
   error:
     fetch_error: "Could not fetch the page. Check the URL and try again."
     no_content: "Could not extract readable text from this page."
@@ -49,6 +50,7 @@ tldr:
     transcript_error: "Failed to fetch the video transcript."
     llm_error: "Summary service error. Please try again later."
     rate_limited: "Daily TLDR quota reached ({limit} calls/day). Try again after UTC midnight."
+    auth_failed: "Your provider rejected the API key. Re-check it in AI settings."
 
 insight_lang:
   current: "Current language: <b>{lang}</b>"

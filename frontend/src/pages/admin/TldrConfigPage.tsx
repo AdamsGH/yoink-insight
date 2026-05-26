@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, X } from 'lucide-react'
 
-import { insightApi, type GatewayModel, type TldrConfig } from '@insight/api/insight'
+import { insightApi, type ByokAdminConfig, type GatewayModel, type TldrConfig } from '@insight/api/insight'
 import {
-  Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label,
+  Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Switch,
   Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList,
 } from '@ui'
+import { KeyRound } from 'lucide-react'
 import { toast } from '@core/components/ui/toast'
 
 export default function TldrConfigPage() {
@@ -23,19 +24,40 @@ export default function TldrConfigPage() {
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string; model_count?: number } | null>(null)
   const [refreshingModels, setRefreshingModels] = useState(false)
 
+  const [byokAdmin, setByokAdmin] = useState<ByokAdminConfig | null>(null)
+  const [byokSaving, setByokSaving] = useState(false)
+
   useEffect(() => {
-    Promise.all([insightApi.getTldrConfig(), insightApi.listModels()])
-      .then(([cfgRes, modelsRes]) => {
+    Promise.all([
+      insightApi.getTldrConfig(),
+      insightApi.listModels(),
+      insightApi.getByokAdmin().catch(() => ({ data: null as ByokAdminConfig | null })),
+    ])
+      .then(([cfgRes, modelsRes, byokRes]) => {
         setConfig(cfgRes.data)
         setAllowed(cfgRes.data.allowed_models)
         setDefaultModel(cfgRes.data.default_model)
         setGatewayUrl(cfgRes.data.gateway_base_url)
         setGatewayKey(cfgRes.data.gateway_api_key)
         setAllModels(modelsRes.data)
+        setByokAdmin(byokRes.data)
       })
       .catch(() => toast.error(t('common.load_error')))
       .finally(() => setLoading(false))
   }, [t])
+
+  const toggleByok = async (next: boolean) => {
+    setByokSaving(true)
+    try {
+      const res = await insightApi.setByokAdmin({ enabled: next })
+      setByokAdmin(res.data)
+      toast.success(t('common.saved'))
+    } catch {
+      toast.error(t('common.load_error'))
+    } finally {
+      setByokSaving(false)
+    }
+  }
 
   const testConnection = async () => {
     setTesting(true)
@@ -129,6 +151,37 @@ export default function TldrConfigPage() {
 
   return (
     <div className="space-y-3">
+      {/* BYOK toggle */}
+      {byokAdmin && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <KeyRound className="h-4 w-4 shrink-0 text-primary" />
+              {t('insight.byok.admin_title', { defaultValue: 'Bring Your Own Key' })}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm leading-snug">
+                  {t('insight.byok.admin_label', { defaultValue: 'Allow users without insight:tldr grant to bring their own LLM key' })}
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground leading-snug">
+                  {t('insight.byok.admin_hint', {
+                    defaultValue: 'When enabled, any authorised user can configure an OpenAI/Anthropic/Gemini/OpenRouter/Perplexity (or custom) endpoint in AI settings to power their /tldr requests.',
+                  })}
+                </p>
+              </div>
+              <Switch
+                checked={byokAdmin.enabled}
+                disabled={byokSaving}
+                onCheckedChange={(v) => void toggleByok(v)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Gateway connection */}
       <Card>
         <CardHeader className="pb-2">

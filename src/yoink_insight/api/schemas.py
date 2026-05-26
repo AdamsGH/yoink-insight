@@ -89,3 +89,61 @@ class TldrAliasUpdate(BaseModel):
     prompt: str | None = None
     domains: str | None = None
     target_alias: str | None = None
+
+
+class ByokModelInfo(BaseModel):
+    id: str
+    supports_websearch: bool = False
+
+
+class ByokProviderInfo(BaseModel):
+    id: str
+    label: str
+    default_base_url: str | None = None
+    requires_base_url: bool = False
+    api_shape: str = "openai"
+    all_websearch: bool = False
+
+
+class ByokConfigResponse(BaseModel):
+    """User-facing view of insight_user_byok row.
+
+    api_key_set is True when the row exists. api_key_masked is the
+    last 4 chars prefixed by '...' (or None if the key is shorter than 4).
+    The raw key is never returned.
+    """
+    enabled: bool                              # global admin tumbler
+    has_config: bool                           # this user has a saved row
+    api_key_set: bool = False
+    api_key_masked: str | None = None
+    provider: str | None = None
+    base_url: str | None = None
+    model: str | None = None
+    models: list[ByokModelInfo] = []
+    models_fetched_at: datetime | None = None
+    tested_at: datetime | None = None
+    test_error: str | None = None
+    providers: list[ByokProviderInfo] = []
+
+
+class ByokConfigUpdate(BaseModel):
+    provider: str
+    base_url: str | None = None
+    api_key: str | None = None                 # None / empty -> keep existing
+    model: str
+
+
+class ByokTestRequest(BaseModel):
+    provider: str
+    base_url: str | None = None
+    api_key: str | None = None                 # None -> use stored key
+
+
+class ByokTestResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    models: list[ByokModelInfo] = []
+
+
+class ByokAdminConfig(BaseModel):
+    enabled: bool

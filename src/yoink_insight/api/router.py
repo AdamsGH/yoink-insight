@@ -15,6 +15,13 @@ from yoink.core.api.exceptions import NotFoundError
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
 from yoink_insight.api.schemas import (
+    ByokAdminConfig,
+    ByokConfigResponse,
+    ByokConfigUpdate,
+    ByokModelInfo,
+    ByokProviderInfo,
+    ByokTestRequest,
+    ByokTestResponse,
     InsightAccessGrant,
     InsightAccessResponse,
     InsightSettingsUpdate,
@@ -31,6 +38,7 @@ from yoink_insight.storage.models import (
     InsightAccess,
     InsightTldrAlias,
     InsightUsageLog,
+    InsightUserByok,
     InsightUserPrompt,
     InsightUserSettings,
 )
@@ -596,6 +604,7 @@ _TLDR_ALLOWED_KEY = "insight_tldr_allowed_models"
 _TLDR_DEFAULT_KEY = "insight_tldr_default_model"
 _TLDR_GW_URL_KEY = "insight_tldr_gateway_url"
 _TLDR_GW_KEY_KEY = "insight_tldr_gateway_key"
+_BYOK_ENABLED_KEY = "insight_byok_enabled"
 
 
 async def _get_tldr_allowed_models_from_db(session: AsyncSession, config: InsightConfig) -> list[str]:
@@ -942,3 +951,282 @@ async def delete_alias(
         raise HTTPException(status_code=404, detail="Alias not found.")
     await session.delete(row)
     await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# BYOK (Bring Your Own Key) - per-user provider config + admin toggle
+# ---------------------------------------------------------------------------
+
+
+async def _get_byok_enabled(session: AsyncSession) -> bool:
+    from yoink.core.db.models import BotSetting
+    row = await session.get(BotSetting, _BYOK_ENABLED_KEY)
+    if row is None or not row.value:
+        return False
+    return row.value.lower() in ("1", "true", "yes", "on")
+
+
+def _mask_key(key: str | None) -> str | None:
+    if not key:
+        return None
+    if len(key) <= 4:
+        return "***"
+    return f"...{key[-4:]}"
+
+
+def _decode_models(row: InsightUserByok | None) -> list[ByokModelInfo]:
+    if row is None or not row.models_json:
+        return []
+    import json
+    try:
+        data = json.loads(row.models_json)
+    except Exception:
+        return []
+    out: list[ByokModelInfo] = []
+    if isinstance(data, list):
+        for entry in data:
+            if isinstance(entry, dict) and entry.get("id"):
+                out.append(ByokModelInfo(
+                    id=entry["id"],
+                    supports_websearch=bool(entry.get("supports_websearch")),
+                ))
+    return out
+
+
+def _provider_catalogue() -> list[ByokProviderInfo]:
+    from yoink_insight.services.byok import provider_catalogue
+    return [ByokProviderInfo(**p) for p in provider_catalogue()]
+
+
+@router.get("/byok/me", response_model=ByokConfigResponse, summary="My BYOK config")
+async def get_my_byok(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ByokConfigResponse:
+    enabled = await _get_byok_enabled(session)
+    row = await session.get(InsightUserByok, current_user.id)
+    return ByokConfigResponse(
+        enabled=enabled,
+        has_config=row is not None,
+        api_key_set=row is not None and bool(row.api_key),
+        api_key_masked=_mask_key(row.api_key) if row is not None else None,
+        provider=row.provider if row else None,
+        base_url=row.base_url if row else None,
+        model=row.model if row else None,
+        models=_decode_models(row),
+        models_fetched_at=row.models_fetched_at if row else None,
+        tested_at=row.tested_at if row else None,
+        test_error=row.test_error if row else None,
+        providers=_provider_catalogue(),
+    )
+
+
+@router.put("/byok/me", response_model=ByokConfigResponse, summary="Save BYOK config")
+async def put_my_byok(
+    body: ByokConfigUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ByokConfigResponse:
+    from yoink_insight.services.byok import (
+        BYOKError,
+        PROVIDERS,
+        probe as byok_probe,
+        resolve_base_url,
+    )
+    enabled = await _get_byok_enabled(session)
+    if not enabled and not _is_owner(current_user):
+        raise HTTPException(status_code=403, detail="BYOK is disabled by the administrator.")
+    if body.provider not in PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{body.provider}'.")
+    if not body.model or not body.model.strip():
+        raise HTTPException(status_code=400, detail="model is required.")
+
+    existing = await session.get(InsightUserByok, current_user.id)
+    api_key = (body.api_key or "").strip()
+    if not api_key:
+        if existing is None:
+            raise HTTPException(status_code=400, detail="api_key is required.")
+        api_key = existing.api_key
+
+    base_url = (body.base_url or "").strip() or None
+    try:
+        resolve_base_url(body.provider, base_url)
+    except BYOKError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid base_url: {exc.args[0] if exc.args else 'bad_base_url'}",
+        )
+
+    # Probe + populate the model cache so the user gets feedback in one call.
+    result = await byok_probe(body.provider, base_url, api_key)
+    models_json: str | None = None
+    tested_at: datetime | None = None
+    test_error: str | None = None
+    if result.ok:
+        import json
+        models_json = json.dumps([
+            {"id": m.id, "supports_websearch": m.supports_websearch}
+            for m in result.models
+        ])
+        tested_at = datetime.now(timezone.utc)
+    else:
+        test_error = result.error or "probe_failed"
+
+    now = datetime.now(timezone.utc)
+    if existing is None:
+        existing = InsightUserByok(
+            user_id=current_user.id,
+            provider=body.provider,
+            base_url=base_url,
+            api_key=api_key,
+            model=body.model.strip(),
+            models_json=models_json,
+            models_fetched_at=now if models_json else None,
+            tested_at=tested_at,
+            test_error=test_error,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(existing)
+    else:
+        existing.provider = body.provider
+        existing.base_url = base_url
+        existing.api_key = api_key
+        existing.model = body.model.strip()
+        if models_json is not None:
+            existing.models_json = models_json
+            existing.models_fetched_at = now
+        if tested_at is not None:
+            existing.tested_at = tested_at
+        existing.test_error = test_error
+        existing.updated_at = now
+    await session.commit()
+    await session.refresh(existing)
+
+    return ByokConfigResponse(
+        enabled=enabled,
+        has_config=True,
+        api_key_set=bool(existing.api_key),
+        api_key_masked=_mask_key(existing.api_key),
+        provider=existing.provider,
+        base_url=existing.base_url,
+        model=existing.model,
+        models=_decode_models(existing),
+        models_fetched_at=existing.models_fetched_at,
+        tested_at=existing.tested_at,
+        test_error=existing.test_error,
+        providers=_provider_catalogue(),
+    )
+
+
+@router.delete("/byok/me", status_code=204, summary="Delete my BYOK config")
+async def delete_my_byok(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    row = await session.get(InsightUserByok, current_user.id)
+    if row is None:
+        return
+    await session.delete(row)
+    await session.commit()
+
+
+@router.post("/byok/me/test", response_model=ByokTestResponse, summary="Probe BYOK key+endpoint")
+async def test_my_byok(
+    body: ByokTestRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ByokTestResponse:
+    from yoink_insight.services.byok import PROVIDERS, probe as byok_probe
+    enabled = await _get_byok_enabled(session)
+    if not enabled and not _is_owner(current_user):
+        raise HTTPException(status_code=403, detail="BYOK is disabled by the administrator.")
+    if body.provider not in PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{body.provider}'.")
+
+    api_key = (body.api_key or "").strip()
+    if not api_key:
+        # Allow re-testing the stored key without re-typing it.
+        existing = await session.get(InsightUserByok, current_user.id)
+        if existing is None or not existing.api_key:
+            return ByokTestResponse(ok=False, error="api_key_required")
+        api_key = existing.api_key
+
+    base_url = (body.base_url or "").strip() or None
+    result = await byok_probe(body.provider, base_url, api_key)
+    return ByokTestResponse(
+        ok=result.ok,
+        error=result.error,
+        models=[ByokModelInfo(id=m.id, supports_websearch=m.supports_websearch) for m in result.models],
+    )
+
+
+@router.post("/byok/me/refresh-models", response_model=ByokConfigResponse, summary="Refresh BYOK model list")
+async def refresh_my_byok_models(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ByokConfigResponse:
+    from yoink_insight.services.byok import probe as byok_probe
+    enabled = await _get_byok_enabled(session)
+    if not enabled and not _is_owner(current_user):
+        raise HTTPException(status_code=403, detail="BYOK is disabled by the administrator.")
+    row = await session.get(InsightUserByok, current_user.id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No BYOK config saved.")
+
+    result = await byok_probe(row.provider, row.base_url, row.api_key)
+    import json
+    now = datetime.now(timezone.utc)
+    if result.ok:
+        row.models_json = json.dumps([
+            {"id": m.id, "supports_websearch": m.supports_websearch}
+            for m in result.models
+        ])
+        row.models_fetched_at = now
+        row.tested_at = now
+        row.test_error = None
+    else:
+        row.test_error = result.error or "probe_failed"
+    row.updated_at = now
+    await session.commit()
+    await session.refresh(row)
+
+    return ByokConfigResponse(
+        enabled=enabled,
+        has_config=True,
+        api_key_set=bool(row.api_key),
+        api_key_masked=_mask_key(row.api_key),
+        provider=row.provider,
+        base_url=row.base_url,
+        model=row.model,
+        models=_decode_models(row),
+        models_fetched_at=row.models_fetched_at,
+        tested_at=row.tested_at,
+        test_error=row.test_error,
+        providers=_provider_catalogue(),
+    )
+
+
+@router.get("/config/byok", response_model=ByokAdminConfig, summary="Get global BYOK toggle (admin+)")
+async def get_byok_admin(
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> ByokAdminConfig:
+    return ByokAdminConfig(enabled=await _get_byok_enabled(session))
+
+
+@router.patch("/config/byok", response_model=ByokAdminConfig, summary="Set global BYOK toggle (admin+)")
+async def set_byok_admin(
+    body: ByokAdminConfig,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
+) -> ByokAdminConfig:
+    from yoink.core.db.models import BotSetting
+    value = "true" if body.enabled else "false"
+    row = await session.get(BotSetting, _BYOK_ENABLED_KEY)
+    if row is None:
+        session.add(BotSetting(key=_BYOK_ENABLED_KEY, value=value))
+    else:
+        row.value = value
+    await session.commit()
+    return ByokAdminConfig(enabled=body.enabled)

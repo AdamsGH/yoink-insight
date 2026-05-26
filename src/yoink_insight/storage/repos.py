@@ -12,6 +12,7 @@ from yoink_insight.storage.models import (
     InsightAccess,
     InsightSummaryCache,
     InsightUsageLog,
+    InsightUserByok,
     InsightUserPrompt,
     InsightUserSettings,
 )
@@ -173,6 +174,96 @@ class InsightUserSettingsRepo:
             await s.commit()
             await s.refresh(row)
             return row
+
+
+class InsightUserByokRepo:
+    """CRUD for insight_user_byok (per-user Bring-Your-Own-Key configs)."""
+
+    def __init__(self, session_factory: async_sessionmaker) -> None:
+        self._sf = session_factory
+
+    async def get(self, user_id: int) -> InsightUserByok | None:
+        async with self._sf() as s:
+            return await s.get(InsightUserByok, user_id)
+
+    async def upsert(
+        self,
+        user_id: int,
+        *,
+        provider: str,
+        base_url: str | None,
+        api_key: str,
+        model: str,
+        models_json: str | None = None,
+        tested_at: datetime | None = None,
+        test_error: str | None = None,
+    ) -> InsightUserByok:
+        async with self._sf() as s:
+            user = await s.get(User, user_id)
+            if user is None:
+                user = User(id=user_id)
+                s.add(user)
+                await s.flush()
+            now = datetime.now(timezone.utc)
+            row = await s.get(InsightUserByok, user_id)
+            if row is None:
+                row = InsightUserByok(
+                    user_id=user_id,
+                    provider=provider,
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    models_json=models_json,
+                    models_fetched_at=now if models_json else None,
+                    tested_at=tested_at,
+                    test_error=test_error,
+                    created_at=now,
+                    updated_at=now,
+                )
+                s.add(row)
+            else:
+                row.provider = provider
+                row.base_url = base_url
+                row.api_key = api_key
+                row.model = model
+                if models_json is not None:
+                    row.models_json = models_json
+                    row.models_fetched_at = now
+                row.tested_at = tested_at if tested_at is not None else row.tested_at
+                row.test_error = test_error
+                row.updated_at = now
+            await s.commit()
+            await s.refresh(row)
+            return row
+
+    async def update_models(
+        self,
+        user_id: int,
+        models_json: str,
+        tested_at: datetime | None,
+        test_error: str | None,
+    ) -> InsightUserByok | None:
+        async with self._sf() as s:
+            row = await s.get(InsightUserByok, user_id)
+            if row is None:
+                return None
+            now = datetime.now(timezone.utc)
+            row.models_json = models_json
+            row.models_fetched_at = now
+            row.tested_at = tested_at
+            row.test_error = test_error
+            row.updated_at = now
+            await s.commit()
+            await s.refresh(row)
+            return row
+
+    async def delete(self, user_id: int) -> bool:
+        async with self._sf() as s:
+            result = await s.execute(
+                delete(InsightUserByok).where(InsightUserByok.user_id == user_id)
+            )
+            await s.commit()
+            return result.rowcount > 0
 
 
 class InsightUserPromptRepo:

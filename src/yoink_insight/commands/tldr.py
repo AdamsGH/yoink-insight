@@ -15,12 +15,15 @@ from sqlalchemy import select
 
 from yoink_insight.bot.middleware import (
     get_effective_insight_config,
+    get_insight_byok_repo,
     get_insight_prompts_repo,
     get_insight_settings_repo,
     get_insight_usage_repo,
+    is_byok_enabled,
 )
 from yoink_insight.services.md_entities import _utf16_len, md_to_entities
 from yoink_insight.services.tldr import (
+    ByokRoute,
     TldrError,
     UserAliasEntry,
     _BUILTIN_ALIASES,
@@ -72,10 +75,41 @@ async def _load_user_alias_entries(context: ContextTypes.DEFAULT_TYPE, user_id: 
     return out
 
 
+async def _resolve_tldr_access(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> tuple[bool, ByokRoute | None]:
+    """Decide whether the user may run /tldr and which path to take.
+
+    Returns (allowed, byok_route). byok_route is non-None when the user has
+    no insight:tldr grant but the admin enabled BYOK and the user has saved a
+    valid (probed-OK) config. Owners can always use the gateway path.
+    """
+    perm_repo = context.bot_data.get("perm_repo")
+    user_repo = context.bot_data.get("user_repo")
+    user = await user_repo.get_or_create(user_id) if user_repo is not None else None
+    has_feature = False
+    if perm_repo is not None:
+        has_feature = await perm_repo.has(user_id, "insight", "tldr", user=user)
+    if has_feature:
+        return True, None
+
+    if not await is_byok_enabled(context):
+        return False, None
+
+    byok_repo = get_insight_byok_repo(context)
+    row = await byok_repo.get(user_id)
+    if row is None or not row.api_key or not row.model or row.tested_at is None:
+        return False, None
+    return True, ByokRoute(
+        provider=row.provider,
+        base_url=row.base_url,
+        api_key=row.api_key,
+        model=row.model,
+    )
+
+
 @require_access(AccessPolicy(
     min_role=UserRole.user,
-    plugin="insight",
-    feature="tldr",
     scopes=["all"],
     silent_deny=False,
     group_silent_deny=True,
@@ -88,6 +122,11 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     settings = get_insight_settings_repo(context)
     config = await get_effective_insight_config(context)
     lang = await settings.get_lang(user_id, default=config.insight_default_lang)
+
+    allowed, byok_route = await _resolve_tldr_access(context, user_id)
+    if not allowed:
+        await update.message.reply_html(t("tldr.no_access", lang))
+        return
 
     args = context.args or []
     if not args:
@@ -247,6 +286,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             model=user_model,
             entries=entries,
             default_instruction_override=user_tldr_prompt,
+            byok=byok_route,
         ):
             accumulated += chunk
             if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:

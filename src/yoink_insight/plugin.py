@@ -19,7 +19,7 @@ from yoink_insight.config import InsightConfig
 
 class InsightPlugin:
     name = "insight"
-    version = "0.1.0"
+    version = "0.3.0"
 
     def __init__(self) -> None:
         self._config = InsightConfig()
@@ -32,10 +32,11 @@ class InsightPlugin:
             InsightAccess,
             InsightSummaryCache,
             InsightUsageLog,
+            InsightUserByok,
             InsightUserPrompt,
             InsightUserSettings,
         )
-        return [InsightAccess, InsightUserSettings, InsightUserPrompt, InsightUsageLog, InsightSummaryCache]
+        return [InsightAccess, InsightUserSettings, InsightUserPrompt, InsightUserByok, InsightUsageLog, InsightSummaryCache]
 
     def get_handlers(self) -> list:
         from yoink_insight.commands import get_handler_specs
@@ -232,6 +233,7 @@ class InsightPlugin:
         from yoink_insight.storage.repos import (
             InsightAccessRepo,
             InsightUsageLogRepo,
+            InsightUserByokRepo,
             InsightUserPromptRepo,
             InsightUserSettingsRepo,
         )
@@ -241,6 +243,7 @@ class InsightPlugin:
         settings_repo = InsightUserSettingsRepo(ctx.session_factory)
         usage_repo = InsightUsageLogRepo(ctx.session_factory)
         prompts_repo = InsightUserPromptRepo(ctx.session_factory)
+        byok_repo = InsightUserByokRepo(ctx.session_factory)
         owner_id = ctx.config.owner_id
         access_service = InsightAccessService(repo, owner_id, ctx.session_factory)
 
@@ -252,6 +255,7 @@ class InsightPlugin:
         ctx.bot_data["insight_settings_repo"] = settings_repo
         ctx.bot_data["insight_usage_repo"] = usage_repo
         ctx.bot_data["insight_prompts_repo"] = prompts_repo
+        ctx.bot_data["insight_byok_repo"] = byok_repo
         ctx.bot_data["insight_access"] = access_service
         ctx.bot_data["insight_summary_cache"] = cache_repo
 

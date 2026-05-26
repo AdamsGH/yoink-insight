@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useGetIdentity } from '@refinedev/core'
 import { BrainCircuit, ChevronDown, FileText, Link, LockKeyhole, MessageCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
 
-import { insightApi, type InsightSettings, type InsightSettingsPatch, type TldrAlias, type TldrAliasInput } from '@insight/api/insight'
+import { insightApi, type ByokConfig, type InsightSettings, type InsightSettingsPatch, type TldrAlias, type TldrAliasInput } from '@insight/api/insight'
+import ByokCard from './ByokCard'
 import { formatDate } from '@core/lib/utils'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle,
@@ -427,6 +428,7 @@ export default function InsightSettingsPage() {
   const [bindDialogDef, setBindDialogDef] = useState<BuiltinAliasDef | null>(null)
 
   const [useSearch, setUseSearch] = useState<boolean | null>(null)
+  const [byok, setByok] = useState<ByokConfig | null>(null)
   // Local edits to prompt overrides. null = unchanged from server; '' (empty)
   // = user explicitly reset to default; non-empty = user-edited prompt.
   const [promptEdits, setPromptEdits] = useState<Record<string, string | null>>({})
@@ -457,15 +459,18 @@ export default function InsightSettingsPage() {
   }, [t])
 
   useEffect(() => {
-    insightApi
-      .getSettings()
-      .then((res) => {
+    Promise.all([
+      insightApi.getSettings(),
+      insightApi.getByok().catch(() => ({ data: null as ByokConfig | null })),
+    ])
+      .then(([res, byokRes]) => {
         setData(res.data)
         setLang(res.data.lang)
         setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
         setGithubToken('')
         setUseSearch(res.data.use_search)
         setPromptEdits({})
+        setByok(byokRes.data)
         if (res.data.has_tldr_access) {
           if (identity?.role === 'owner') {
             loadModels()
@@ -677,6 +682,11 @@ export default function InsightSettingsPage() {
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* BYOK - only when admin enabled or the user already has a config saved */}
+        {byok && (byok.enabled || byok.has_config) && (
+          <ByokCard data={byok} onChange={setByok} />
         )}
 
         {/* TL;DR */}
