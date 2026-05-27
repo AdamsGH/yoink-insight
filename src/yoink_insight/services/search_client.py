@@ -45,7 +45,10 @@ class SearchFetchError(Exception):
 def _decode_toon(text: str) -> dict:
     """Decode a TOON-encoded response into a dict."""
     from toon_format import decode  # local import: optional dep at runtime
-    return decode(text)
+    decoded = decode(text)
+    if not isinstance(decoded, dict):
+        raise SearchFetchError(f"TOON decoded to {type(decoded).__name__}, expected dict")
+    return decoded
 
 
 async def search_fetch(

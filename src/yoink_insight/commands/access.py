@@ -39,7 +39,7 @@ async def _cmd_insight_grant(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await access.grant(user_id, granted_by=update.effective_user.id, lang=lang)
 
     await update.message.reply_html(
-        t("insight_access.granted", "en", user_id=user_id, lang=lang)
+        t("insight_access.granted", "en", user_id=user_id, language=lang)
     )
 
 
@@ -91,7 +91,7 @@ async def _cmd_insight_list(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 "insight_access.list_item",
                 "en",
                 user_id=row.user_id,
-                lang=row.lang,
+                language=row.lang,
                 granted_by=row.granted_by,
             )
         )

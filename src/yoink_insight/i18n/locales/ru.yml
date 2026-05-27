@@ -54,14 +54,14 @@ tldr:
     auth_failed: "Ваш провайдер отклонил API-ключ. Проверьте его в настройках AI."
 
 insight_lang:
-  current: "Текущий язык: <b>{lang}</b>"
-  changed: "Язык установлен: <b>{lang}</b> ✅"
+  current: "Текущий язык: <b>{language}</b>"
+  changed: "Язык установлен: <b>{language}</b> ✅"
   no_access: "У вас нет доступа к Insight."
 
 insight_access:
-  granted: "✅ Доступ к Insight выдан пользователю {user_id} (язык: {lang})"
+  granted: "✅ Доступ к Insight выдан пользователю {user_id} (язык: {language})"
   revoked: "🗑 Доступ к Insight отозван у пользователя {user_id}"
   not_found: "Пользователь {user_id} не найден в списке доступа Insight."
   list_empty: "Нет пользователей с доступом к Insight."
   list_header: "Пользователи с доступом к Insight:"
-  list_item: "• <code>{user_id}</code> lang={lang} выдал {granted_by}"
+  list_item: "• <code>{user_id}</code> lang={language} выдал {granted_by}"

@@ -18,6 +18,7 @@ from yoink_insight.bot.middleware import (
 )
 from yoink_insight.commands._runner import run_insight_command
 from yoink_insight.services.gemini import GeminiSummarizer, InsightError
+from yoink_insight.storage.repos import InsightSummaryCacheRepo
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,10 @@ async def _cmd_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_html(t("insight.no_url", lang))
         return
 
-    cache_repo = context.bot_data.get("insight_summary_cache")
+    cache_repo: InsightSummaryCacheRepo | None = context.bot_data.get("insight_summary_cache")
+    if cache_repo is None:
+        await update.message.reply_html(t("insight.error.generic", lang))
+        return
     usage_repo = get_insight_usage_repo(context)
     prompt_override = await get_insight_prompts_repo(context).get(user_id, "about")
 

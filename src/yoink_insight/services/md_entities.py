@@ -100,7 +100,8 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
                 if not _in_link:
                     entities.append({"type": "code", "offset": start, "length": pos() - start})
             elif t == "link_open":
-                href = dict(tok.attrs or {}).get("href", "")
+                href_raw = dict(tok.attrs or {}).get("href", "")
+                href = str(href_raw) if href_raw is not None else ""
                 open_span("text_link", href)
                 _in_link = True
             elif t == "link_close":

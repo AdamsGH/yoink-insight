@@ -491,7 +491,7 @@ async def get_my_insight_settings(
     lang = settings_row.lang if settings_row else config.insight_default_lang
     tldr_model = settings_row.tldr_model if settings_row else None
     github_token = settings_row.github_token if settings_row else None
-    use_search = bool(settings_row.use_search) if settings_row else False
+    use_search = settings_row.use_search if settings_row else False
     allowed = await _get_tldr_allowed_models_from_db(session, config)
     user_prompts = await _load_user_prompts(session, current_user.id)
     return InsightUserSettingsResponse(
@@ -541,7 +541,7 @@ async def update_my_insight_settings(
             lang=body.lang,
             tldr_model=tldr_model,
             github_token=body.github_token,
-            use_search=bool(body.use_search) if body.use_search is not None else False,
+            use_search=body.use_search if body.use_search is not None else False,
         )
         session.add(settings_row)
     else:
@@ -551,7 +551,7 @@ async def update_my_insight_settings(
         if body.github_token is not None:
             settings_row.github_token = body.github_token or None
         if body.use_search is not None:
-            settings_row.use_search = bool(body.use_search)
+            settings_row.use_search = body.use_search
 
     # Prompt overrides: only commands matching the user's granted features
     # are accepted; the rest are silently dropped to avoid noisy 4xx on a
@@ -592,7 +592,7 @@ async def update_my_insight_settings(
         tldr_model=settings_row.tldr_model,
         tldr_allowed_models=allowed if has_tldr else [],
         github_token_set=bool(settings_row.github_token),
-        use_search=bool(settings_row.use_search) if has_search else False,
+        use_search=settings_row.use_search if has_search else False,
         prompts=user_prompts,
         prompt_defaults=_get_builtin_prompt_defaults(),
         alias_defaults=_get_builtin_alias_defaults(),

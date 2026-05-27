@@ -139,7 +139,7 @@ class GeminiSummarizer:
             raise InsightError("api_error") from exc
 
         if response.prompt_feedback and response.prompt_feedback.block_reason:
-            reason = str(response.prompt_feedback.block_reason.value).lower()
+            reason = response.prompt_feedback.block_reason.value.lower()
             logger.warning("Gemini blocked prompt: %s", reason)
             if "prohibited" in reason:
                 raise InsightError("prohibited_content")

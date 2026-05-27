@@ -312,7 +312,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         video_seconds=prepared.video_seconds,
     )
 
-    _ = draft_active  # quiet linter: presence is for future cleanup hooks
+    del draft_active  # presence is for future cleanup hooks
 
 
 def register(app: Application) -> None:

@@ -54,14 +54,14 @@ tldr:
     auth_failed: "Your provider rejected the API key. Re-check it in AI settings."
 
 insight_lang:
-  current: "Current language: <b>{lang}</b>"
-  changed: "Language set to <b>{lang}</b> ✅"
+  current: "Current language: <b>{language}</b>"
+  changed: "Language set to <b>{language}</b> ✅"
   no_access: "You don't have Insight access."
 
 insight_access:
-  granted: "✅ Insight access granted to user {user_id} (lang: {lang})"
+  granted: "✅ Insight access granted to user {user_id} (lang: {language})"
   revoked: "🗑 Insight access revoked for user {user_id}"
   not_found: "User {user_id} not found in Insight access list."
   list_empty: "No users have Insight access."
   list_header: "Users with Insight access:"
-  list_item: "• <code>{user_id}</code> lang={lang} granted by {granted_by}"
+  list_item: "• <code>{user_id}</code> lang={language} granted by {granted_by}"

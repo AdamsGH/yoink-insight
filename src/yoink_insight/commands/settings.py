@@ -52,7 +52,7 @@ async def _cmd_insight_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     current_lang = await settings.get_lang(user_id, default=config.insight_default_lang)
 
     await update.message.reply_html(
-        t("insight_lang.current", current_lang, lang=current_lang),
+        t("insight_lang.current", current_lang, language=current_lang),
         reply_markup=_lang_keyboard(current_lang),
     )
 
@@ -73,7 +73,7 @@ async def _cb_insight_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if query.message:
         await query.edit_message_text(
-            t("insight_lang.changed", lang, lang=lang),
+            t("insight_lang.changed", lang, language=lang),
             parse_mode="HTML",
         )
 
