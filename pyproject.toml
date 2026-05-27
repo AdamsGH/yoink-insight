@@ -50,3 +50,4 @@ search-path = [
     "../yoink-music/src",
     "../yoink-stats/src",
 ]
+ignore-missing-imports = ["pytest", "pytest_asyncio"]
