@@ -432,6 +432,34 @@ class ByokRoute:
     model: str
 
 
+async def resolve_tldr_route(user_id: int, context) -> ByokRoute | None:
+    """Return a ByokRoute when /tldr should bypass the gateway for this user.
+
+    Returns None when the user has the explicit `insight:tldr` grant (or is the
+    owner) so the gateway path is taken. Returns a ByokRoute when the user is
+    allowed only through BYOK and has a probed config. Callers must invoke
+    this after the @require_access gate has already let the user through,
+    which guarantees one of the two paths is viable.
+    """
+    access = context.bot_data.get("insight_access")
+    if access is not None and await access.is_allowed(user_id):
+        return None
+    byok_repo = context.bot_data.get("insight_byok_repo")
+    if byok_repo is None:
+        return None
+    row = await byok_repo.get(user_id)
+    if row is None:
+        return None
+    if row.tested_at is None or row.test_error:
+        return None
+    return ByokRoute(
+        provider=row.provider,
+        base_url=row.base_url,
+        api_key=row.api_key,
+        model=row.model,
+    )
+
+
 async def stream_llm(
     prepared: PreparedTldr,
     lang: str,

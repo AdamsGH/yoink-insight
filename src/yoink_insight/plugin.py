@@ -262,3 +262,7 @@ class InsightPlugin:
         from yoink.core.activity import register_activity_provider  # noqa: PLC0415
         from yoink_insight.activity import insight_activity_provider  # noqa: PLC0415
         register_activity_provider("insight", insight_activity_provider)
+
+        from yoink.core.auth.effective_features import register_feature_provider  # noqa: PLC0415
+        from yoink_insight.services.byok_access import byok_tldr_provider  # noqa: PLC0415
+        register_feature_provider("insight", "tldr", byok_tldr_provider)

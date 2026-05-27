@@ -24,6 +24,7 @@ from yoink_insight.services.tldr import (
     parse_aliases,
     parse_domains,
     prepare_tldr,
+    resolve_tldr_route,
     stream_llm,
 )
 
@@ -103,6 +104,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     user_model = await settings.get_tldr_model(user_id)
     user_github_token = await settings.get_github_token(user_id)
+    byok_route = await resolve_tldr_route(user_id, context)
 
     entries = await _load_user_alias_entries(context, user_id)
 
@@ -223,6 +225,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             question=question if alias_key is None else None,
             model=user_model,
             entries=entries,
+            byok=byok_route,
         ):
             accumulated += chunk
             if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:

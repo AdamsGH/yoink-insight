@@ -265,6 +265,29 @@ class InsightUserByokRepo:
             await s.commit()
             return result.rowcount > 0
 
+    async def is_ready(self, user_id: int) -> bool:
+        """True if the user has a saved BYOK config that passed its last probe.
+
+        "Ready" = row exists, was tested at least once, and last probe did not
+        record an error. The global `insight_byok_enabled` toggle is checked
+        separately by the caller (it lives in bot_settings, not here).
+        """
+        async with self._sf() as s:
+            row = await s.execute(
+                select(InsightUserByok.user_id).where(
+                    InsightUserByok.user_id == user_id,
+                    InsightUserByok.tested_at.is_not(None),
+                    InsightUserByok.test_error.is_(None),
+                )
+            )
+            return row.scalar_one_or_none() is not None
+
+    async def list_user_ids(self) -> list[int]:
+        """Every user_id with a stored BYOK row (regardless of probe state)."""
+        async with self._sf() as s:
+            rows = await s.execute(select(InsightUserByok.user_id))
+            return [r[0] for r in rows.all()]
+
 
 class InsightUserPromptRepo:
     """CRUD for per-user prompt overrides keyed by (user_id, command)."""

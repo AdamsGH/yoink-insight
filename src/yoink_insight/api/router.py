@@ -4,9 +4,10 @@ Mounted at /api/v1/insight/ by the core API factory.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -606,6 +607,30 @@ _TLDR_GW_URL_KEY = "insight_tldr_gateway_url"
 _TLDR_GW_KEY_KEY = "insight_tldr_gateway_key"
 _BYOK_ENABLED_KEY = "insight_byok_enabled"
 
+logger = logging.getLogger(__name__)
+
+
+async def _refresh_user_bot_commands(request: Request, session: AsyncSession, user_id: int) -> None:
+    """Re-register Telegram bot commands for a user whose BYOK state changed.
+
+    BYOK readiness flips effective `insight:tldr` grants on or off, which
+    affects `setMyCommands` and `/help` visibility. Mirrors what
+    core/api/routers/permissions.py does after a grant or revoke.
+    """
+    user = await session.get(User, user_id)
+    if user is None:
+        return
+    try:
+        from yoink.core.bot.bot_commands import refresh_user_commands
+        sf = getattr(request.app.state, "bot_data", {}).get("session_factory")
+        await refresh_user_commands(
+            request.app.state, user_id,
+            role=user.role.value, lang=user.language,
+            session_factory=sf,
+        )
+    except Exception:
+        logger.exception("BYOK: failed to refresh bot commands for user=%d", user_id)
+
 
 async def _get_tldr_allowed_models_from_db(session: AsyncSession, config: InsightConfig) -> list[str]:
     """Load allowed_models from bot_settings, fall back to [default_model]."""
@@ -1024,6 +1049,7 @@ async def get_my_byok(
 @router.put("/byok/me", response_model=ByokConfigResponse, summary="Save BYOK config")
 async def put_my_byok(
     body: ByokConfigUpdate,
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ByokConfigResponse:
@@ -1103,6 +1129,8 @@ async def put_my_byok(
     await session.commit()
     await session.refresh(existing)
 
+    await _refresh_user_bot_commands(request, session, current_user.id)
+
     return ByokConfigResponse(
         enabled=enabled,
         has_config=True,
@@ -1121,6 +1149,7 @@ async def put_my_byok(
 
 @router.delete("/byok/me", status_code=204, summary="Delete my BYOK config")
 async def delete_my_byok(
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
@@ -1129,6 +1158,7 @@ async def delete_my_byok(
         return
     await session.delete(row)
     await session.commit()
+    await _refresh_user_bot_commands(request, session, current_user.id)
 
 
 @router.post("/byok/me/test", response_model=ByokTestResponse, summary="Probe BYOK key+endpoint")
@@ -1163,6 +1193,7 @@ async def test_my_byok(
 
 @router.post("/byok/me/refresh-models", response_model=ByokConfigResponse, summary="Refresh BYOK model list")
 async def refresh_my_byok_models(
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ByokConfigResponse:
@@ -1191,6 +1222,8 @@ async def refresh_my_byok_models(
     await session.commit()
     await session.refresh(row)
 
+    await _refresh_user_bot_commands(request, session, current_user.id)
+
     return ByokConfigResponse(
         enabled=enabled,
         has_config=True,
@@ -1218,15 +1251,35 @@ async def get_byok_admin(
 @router.patch("/config/byok", response_model=ByokAdminConfig, summary="Set global BYOK toggle (admin+)")
 async def set_byok_admin(
     body: ByokAdminConfig,
+    request: Request,
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> ByokAdminConfig:
     from yoink.core.db.models import BotSetting
     value = "true" if body.enabled else "false"
     row = await session.get(BotSetting, _BYOK_ENABLED_KEY)
+    was_enabled = False
     if row is None:
         session.add(BotSetting(key=_BYOK_ENABLED_KEY, value=value))
     else:
+        was_enabled = (row.value or "").strip().lower() in ("1", "true", "yes", "on")
         row.value = value
     await session.commit()
+
+    # Fan-out: every user with a stored BYOK row had their effective
+    # insight:tldr state flip. Refresh their bot commands so /help and
+    # setMyCommands reflect the new toggle.
+    if was_enabled != body.enabled:
+        from yoink_insight.storage.repos import InsightUserByokRepo
+        sf = getattr(request.app.state, "bot_data", {}).get("session_factory")
+        if sf is not None:
+            try:
+                repo = InsightUserByokRepo(sf)
+                affected = await repo.list_user_ids()
+            except Exception:
+                logger.exception("BYOK toggle: failed to enumerate users")
+                affected = []
+            for uid in affected:
+                await _refresh_user_bot_commands(request, session, uid)
+
     return ByokAdminConfig(enabled=body.enabled)
