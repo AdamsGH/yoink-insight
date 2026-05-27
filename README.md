@@ -2,10 +2,11 @@
 
 AI-powered content insights plugin for [yoink-core](https://github.com/AdamsGH/yoink-core).
 
-Two independent features, each with its own RBAC grant:
+Three independent features, each with its own RBAC grant:
 
 - **AI Summary** (`insight:summary`) - YouTube transcript summarisation via Gemini.
 - **TLDR** (`insight:tldr`) - Summarise any URL (YouTube or web page) via a gateway-routed OpenAI-compatible LLM (default: `claude-haiku-4-5` through the local gateway).
+- **AI Search** (`insight:search`) - Routes summary/tldr requests through the gateway answer engine for web-search-enhanced results.
 
 Included in yoink-core as a git submodule at `plugins/yoink-insight`.
 
@@ -13,31 +14,32 @@ Included in yoink-core as a git submodule at `plugins/yoink-insight`.
 
 | Command | Feature gate | Scope | Description |
 |---|---|---|---|
-| `/summary <url>` | `insight:summary` | any | Bullet-point summary of a YouTube video |
-| `/about <url>` | `insight:summary` | any | 2-3 sentence description of a YouTube video |
-| `/tldr <url> [question]` | `insight:tldr` | any | Summarise any URL; optional focus question steers the answer |
-| `/insight_lang <code>` | `insight:summary` | private | Set preferred response language |
-| `/insight_grant <id>` | admin | private | Grant Insight access to a user |
+| `/about <url>` | `insight:summary` | any | Describe a YouTube video (2-3 sentences) |
+| `/summary <url>` | `insight:summary` | any | Summarize a YouTube video (bullet points) |
+| `/tldr <url> [question]` | `insight:tldr` | any | Summarize any URL (+ max / nobullshit / tale modifiers) |
+| `/insight_lang <code>` | `insight:summary` | private | Set Insight language |
+| `/insight_grant <id>` | admin | private | Grant Insight access |
 | `/insight_revoke <id>` | admin | private | Revoke Insight access |
-| `/insight_list` | admin | private | List users with access |
+| `/insight_list` | admin | private | List Insight access |
 
 `/tldr` accepts YouTube links, web articles, or any publicly reachable URL. For YouTube it fetches the transcript from the gateway (`POST /youtube/transcript`); for other URLs it fetches HTML with httpx and extracts main text via trafilatura.
 
 ## RBAC
 
-Two `FeatureSpec` objects, both `default_min_role=None` (explicit grant required; owner always passes):
+Three `FeatureSpec` objects, all `default_min_role=None` (explicit grant required; owner always passes):
 
 | Feature | Label | Description |
 |---|---|---|
-| `insight:summary` | AI Summary | `/summary` and `/about` commands |
-| `insight:tldr` | TLDR | `/tldr` command |
+| `insight:summary` | AI Summary | `/summary` and `/about` commands (YouTube transcript + Gemini) |
+| `insight:tldr` | TL;DR | `/tldr` command (any URL summarised via gateway LLM) |
+| `insight:search` | AI Search | Routes `/summary`, `/about`, and `/tldr` through the gateway answer engine; enables web-search and smart scrape |
 
 Grants are managed via:
 - Web dashboard: admin users panel (Permissions tab per user)
 - Bot commands: `/insight_grant`, `/insight_revoke`
 - API: `POST/DELETE /api/v1/insight/access/{uid}`
 
-The two features are independent: a user can have `insight:tldr` without `insight:summary`.
+All three features are independent: a user can have `insight:tldr` without `insight:summary`, and `insight:search` without either.
 
 ## TLDR - how it works
 
@@ -94,21 +96,25 @@ Web-search capability is detected by model id substrings (`sonar*`, `*:online`, 
 
 The `/tldr` bot handler picks a path automatically:
 
-1. User has `insight:tldr` grant -> route through the gateway (same as today).
+1. User has `insight:tldr` grant (explicit, role threshold, or via BYOK provider) -> route through the gateway.
 2. No grant, BYOK enabled, user has a saved+probed config -> route through the user's provider directly, bypassing the gateway.
 3. Otherwise -> reply with `tldr.no_access`.
+
+BYOK readiness (global toggle on + saved row + probed key) acts as an effective `insight:tldr` grant via the `EffectiveFeatureResolver` provider registered in `yoink_insight.plugin.setup`. This means BYOK users see `/tldr` in `/help` and in `setMyCommands` without an explicit `user_permissions` row.
 
 ### BYOK API
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/byok/me` | Current config (api_key masked) + provider catalogue |
-| PUT | `/byok/me` | Save provider + base_url + key + model; runs a probe + caches model list |
-| DELETE | `/byok/me` | Remove the user's config |
+| PUT | `/byok/me` | Save provider + base_url + key + model; runs probe + caches model list; calls `refresh_user_commands` |
+| DELETE | `/byok/me` | Remove the user's config; calls `refresh_user_commands` |
 | POST | `/byok/me/test` | Probe an arbitrary `{provider, base_url, api_key}` triple, returns models with websearch flag |
-| POST | `/byok/me/refresh-models` | Re-fetch the model list using the stored credentials |
+| POST | `/byok/me/refresh-models` | Re-fetch model list using stored credentials; calls `refresh_user_commands` |
 | GET | `/config/byok` | Admin: read global toggle |
-| PATCH | `/config/byok` | Admin: write global toggle (`{enabled: bool}`) |
+| PATCH | `/config/byok` | Admin: write global toggle (`{enabled: bool}`); fans out `refresh_user_commands` to all users with a saved BYOK row |
+
+Every write path calls `refresh_user_commands` because BYOK readiness flips the effective `insight:tldr` grant, which changes the user's `setMyCommands` menu and `/help` output.
 
 ### Storage
 
@@ -129,6 +135,26 @@ insight_user_byok (
 ```
 
 Keys are stored as plain text; protect the database accordingly. The admin toggle lives in `bot_settings(key='insight_byok_enabled')`.
+
+```sql
+insight_user_prompts (
+    user_id    BIGINT      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    command    VARCHAR(16) NOT NULL,   -- 'summary' | 'about' | 'tldr'
+    prompt     TEXT        NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, command)
+)
+
+insight_tldr_aliases (
+    id           SERIAL PRIMARY KEY,
+    user_id      BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    aliases      VARCHAR(256),          -- comma-separated keyword(s)
+    prompt       TEXT,
+    domains      VARCHAR(512),          -- comma-separated fnmatch globs
+    target_alias VARCHAR(32),           -- built-in alias to redirect to
+    created_at   TIMESTAMPTZ  NOT NULL
+)
+```
 
 ## Configuration
 
@@ -172,10 +198,19 @@ Mounted at `/api/v1/insight/`. Auth: JWT Bearer token.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | /settings/me | Own settings: lang, access flags, tldr_model, tldr_allowed_models |
-| PATCH | /settings/me | Update lang and/or tldr_model |
+| GET | /settings/me | Own settings: lang, access flags, tldr_model, tldr_allowed_models, prompts, aliases |
+| PATCH | /settings/me | Update lang, tldr_model, use_search, and per-command prompt overrides |
 
 `PATCH /settings/me` body: `{ "lang": "ru", "tldr_model": "cpa/anthropic/claude-haiku-4-5" }`. Non-owner users can only set a model from the admin-configured allowed list.
+
+### TLDR aliases (user)
+
+| Method | Path | Description |
+|---|---|---|
+| GET | /aliases | List my /tldr aliases |
+| POST | /aliases | Create alias (aliases+prompt, or domain binding to built-in) |
+| PATCH | /aliases/{id} | Update alias |
+| DELETE | /aliases/{id} | Delete alias |
 
 ### TLDR config (admin/owner)
 
@@ -210,15 +245,24 @@ Single Alembic chain. Insight-relevant migrations:
 | 0033 | `insight_summary_cache` table |
 | 0035 | `insight_summary_cache.video_id` renamed to `content_key VARCHAR(512)` to support non-YouTube URLs |
 | 0036 | `insight_user_settings.tldr_model VARCHAR(128)` per-user LLM model override |
+| 0037 | `insight_user_settings.github_token VARCHAR(256)` for GitHub URL support in /tldr |
+| 0039 | `insight_tldr_aliases` table (initial: user-defined /tldr prompt aliases) |
+| 0040 | `insight_tldr_aliases.alias` renamed to `aliases` column |
+| 0041 | `insight_tldr_aliases`: domain bindings and binding-to-built-in rows |
+| 0042 | `insight_usage_log`: `content_chars`, `video_seconds`, `alias_key` columns (TLDR metrics) |
+| 0043 | `insight_user_prompts` table (per-user default prompt overrides per command) |
+| 0044 | `insight_user_settings.use_search` column (AI Search toggle) |
 | 0045 | `insight_user_byok` per-user Bring-Your-Own-Key configuration |
 
 ### Schema
 
 ```sql
 insight_user_settings (
-    user_id    BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    lang       VARCHAR(8)   NOT NULL DEFAULT 'en',
-    tldr_model VARCHAR(128)          -- NULL = use admin default
+    user_id       BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    lang          VARCHAR(8)   NOT NULL DEFAULT 'en',
+    tldr_model    VARCHAR(128),          -- NULL = use admin default
+    github_token  VARCHAR(256),
+    use_search    BOOLEAN      NOT NULL DEFAULT false
 )
 
 insight_summary_cache (
@@ -233,51 +277,20 @@ insight_summary_cache (
 )
 
 insight_usage_log (
-    id         SERIAL PRIMARY KEY,
-    user_id    BIGINT      REFERENCES users(id) ON DELETE CASCADE,
-    command    VARCHAR(16) NOT NULL,
-    video_id   VARCHAR(32),
-    lang       VARCHAR(8)  NOT NULL,
-    status     VARCHAR(16) NOT NULL,   -- 'ok' | 'error' | 'cached'
-    error_code VARCHAR(32),
-    created_at TIMESTAMPTZ NOT NULL
+    id             SERIAL PRIMARY KEY,
+    user_id        BIGINT      REFERENCES users(id) ON DELETE CASCADE,
+    command        VARCHAR(16) NOT NULL,   -- 'summary' | 'about' | 'tldr' | 'tldr:<alias>'
+    video_id       VARCHAR(32),
+    lang           VARCHAR(8)  NOT NULL,
+    status         VARCHAR(16) NOT NULL,   -- 'ok' | 'error' | 'cached'
+    error_code     VARCHAR(32),
+    created_at     TIMESTAMPTZ NOT NULL,
+    content_chars  INTEGER,               -- TLDR: extracted text length
+    video_seconds  INTEGER,               -- TLDR: YouTube video duration
+    alias_key      VARCHAR(64)            -- TLDR: alias used, if any
 )
 ```
 
 Cache TTL is 24 hours. For `/summary`/`/about` the cache key is the bare YouTube video ID (shared between commands for the same video). For `/tldr` the key is the normalized URL (`scheme://host/path`, no query/fragment).
 
 Rate limits are enforced per-command: `/summary`+`/about` share `insight_rate_limit_per_day`; `/tldr` has its own `tldr_rate_limit_per_day`. Cache hits never count against either limit.
-
-## Package structure
-
-```
-src/yoink_insight/
-  plugin.py              # InsightPlugin entry point
-  config.py              # InsightConfig (pydantic-settings)
-  api/
-    router.py            # FastAPI routes
-    schemas.py           # Pydantic request/response models
-  bot/middleware.py      # bot_data helpers (get_insight_config etc.)
-  commands/
-    _runner.py           # shared streaming runner (summary/about)
-    summary.py           # /summary handler
-    about.py             # /about handler
-    tldr.py              # /tldr handler
-    access.py            # /insight_grant, /insight_revoke, /insight_list
-    settings.py          # /insight_lang handler
-  services/
-    gemini.py            # GeminiSummarizer: transcript (asyncio.to_thread) + Gemini streaming
-    tldr.py              # TldrService: gateway transcript + httpx/trafilatura + OpenAI-compat streaming
-    access.py            # InsightAccessService - reads core user_permissions
-  storage/
-    models.py            # ORM models
-    repos.py             # InsightSummaryCacheRepo, InsightUserSettingsRepo, InsightAccessRepo, InsightUsageLogRepo
-  i18n/locales/          # en.yml, ru.yml
-frontend/
-  manifest.tsx           # route + nav registration
-  src/
-    api/insight.ts       # typed API client
-    pages/
-      settings/index.tsx      # language picker + TLDR model selector
-      admin/TldrConfigPage.tsx # allowed models config
-```
