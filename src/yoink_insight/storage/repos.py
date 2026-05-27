@@ -429,6 +429,7 @@ class InsightUsageLogRepo:
         alias_key: str | None = None,
         content_chars: int | None = None,
         video_seconds: int | None = None,
+        route: str = "gateway",
     ) -> None:
         async with self._sf() as s:
             s.add(InsightUsageLog(
@@ -441,6 +442,7 @@ class InsightUsageLogRepo:
                 alias_key=alias_key,
                 content_chars=content_chars,
                 video_seconds=video_seconds,
+                route=route,
             ))
             await s.commit()
 

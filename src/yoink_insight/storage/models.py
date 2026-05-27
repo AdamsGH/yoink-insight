@@ -184,3 +184,7 @@ class InsightUsageLog(Base):
     content_chars: Mapped[int | None] = mapped_column(Integer, nullable=True)
     video_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     alias_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Path the request took: 'gateway' (default; goes through llmgw) or
+    # 'byok' (user-owned provider, gateway bypassed). Required for split
+    # cost / usage graphs - the gateway sees zero traffic on the byok path.
+    route: Mapped[str] = mapped_column(String(16), nullable=False, default="gateway")

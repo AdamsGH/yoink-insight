@@ -94,13 +94,15 @@ Supported providers:
 
 Web-search capability is detected by model id substrings (`sonar*`, `*:online`, `*-search-preview`, `perplexity/*`) plus `provider.all_websearch=True`. Models that match render with a soft emerald tint and a globe icon; picking a model without the marker triggers a confirmation dialog before save.
 
-The `/tldr` bot handler picks a path automatically:
+The `/tldr` bot handler picks a path automatically (`services.tldr.resolve_tldr_route`):
 
-1. User has `insight:tldr` grant (explicit, role threshold, or via BYOK provider) -> route through the gateway.
-2. No grant, BYOK enabled, user has a saved+probed config -> route through the user's provider directly, bypassing the gateway.
+1. User has an explicit `insight:tldr` grant (user_permissions row) or is owner -> route through the gateway.
+2. No gateway grant, BYOK enabled, user has a saved + probed config -> route through the user's provider directly, bypassing the gateway. Every successful call writes `route='byok'` to `insight_usage_log` so analytics can split per path.
 3. Otherwise -> reply with `tldr.no_access`.
 
-BYOK readiness (global toggle on + saved row + probed key) acts as an effective `insight:tldr` grant via the `EffectiveFeatureResolver` provider registered in `yoink_insight.plugin.setup`. This means BYOK users see `/tldr` in `/help` and in `setMyCommands` without an explicit `user_permissions` row.
+Both paths count as effective `insight:tldr` access. The `EffectiveFeatureResolver` provider registered in `yoink_insight.plugin.setup` exposes BYOK readiness (global toggle on + saved row + probed key) as a `GrantSource.provider` grant, so BYOK-only users see `/tldr` in `/help` and `setMyCommands` without a `user_permissions` row.
+
+`InsightUserSettingsResponse` exposes two parallel flags per feature: `has_tldr_access` / `has_search_access` (any effective grant) and `has_tldr_gateway_access` / `has_search_gateway_access` (gateway-side grant only, i.e. `GrantSource.owner`, `.explicit`, or `.role`). The web settings page uses the gateway flag to gate the allowed-model picker, the GitHub token field, and the AI Tools `use_search` toggle - BYOK-only users do not see them because their requests bypass the gateway entirely.
 
 ### BYOK API
 
@@ -253,6 +255,7 @@ Single Alembic chain. Insight-relevant migrations:
 | 0043 | `insight_user_prompts` table (per-user default prompt overrides per command) |
 | 0044 | `insight_user_settings.use_search` column (AI Search toggle) |
 | 0045 | `insight_user_byok` per-user Bring-Your-Own-Key configuration |
+| 0046 | `insight_usage_log.route` column (`gateway` default, `byok` for direct-provider calls) |
 
 ### Schema
 
@@ -287,7 +290,9 @@ insight_usage_log (
     created_at     TIMESTAMPTZ NOT NULL,
     content_chars  INTEGER,               -- TLDR: extracted text length
     video_seconds  INTEGER,               -- TLDR: YouTube video duration
-    alias_key      VARCHAR(64)            -- TLDR: alias used, if any
+    alias_key      VARCHAR(64),           -- TLDR: alias used, if any
+    route          VARCHAR(16) NOT NULL   -- 'gateway' (default) | 'byok'
+                              DEFAULT 'gateway'
 )
 ```
 

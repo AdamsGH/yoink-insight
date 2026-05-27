@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yoink-insight"
-version = "0.3.2"
+version = "0.3.3"
 requires-python = ">=3.12"
 dependencies = [
     "yoink-core>=0.1.0",
