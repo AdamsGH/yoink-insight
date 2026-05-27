@@ -88,7 +88,7 @@ def _fetch_transcript(video_id: str, lang_csv: str) -> str:
 
     Raises InsightError if no transcript is available.
     """
-    langs = [l.strip() for l in lang_csv.split(",") if l.strip()]
+    langs = [code.strip() for code in lang_csv.split(",") if code.strip()]
     api = YouTubeTranscriptApi()
     try:
         # Try preferred languages first, then fall back to any available

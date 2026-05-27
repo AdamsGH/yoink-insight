@@ -40,3 +40,13 @@ project-includes = [
     "**/*.py*",
     "**/*.ipynb",
 ]
+# Plugins live in a monorepo: the real interpreter + deps are at the repo root,
+# and cross-plugin/core imports resolve via explicit search paths.
+python-interpreter-path = "../../.venv/bin/python"
+search-path = [
+    "src",
+    "../../src",
+    "../yoink-dl/src",
+    "../yoink-music/src",
+    "../yoink-stats/src",
+]
