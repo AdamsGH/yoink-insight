@@ -36,7 +36,13 @@ class InsightUserSettingsResponse(BaseModel):
     lang: str
     has_gemini_access: bool
     has_tldr_access: bool = False
+    # True when the tldr grant came from the gateway path (explicit
+    # user_permissions row, role threshold, or owner). False when the only
+    # source of access is a BYOK provider grant. UI uses this to gate the
+    # gateway-only controls (allowed-model picker, GitHub token).
+    has_tldr_gateway_access: bool = False
     has_search_access: bool = False
+    has_search_gateway_access: bool = False
     tldr_model: str | None = None
     tldr_allowed_models: list[str] = []
     github_token_set: bool = False

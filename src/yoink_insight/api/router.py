@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.api.deps import get_current_user, get_db
 from yoink.core.api.exceptions import NotFoundError
+from yoink.core.auth.effective_features import EffectiveFeatureResolver, GrantSource
 from yoink.core.auth.rbac import require_role
 from yoink.core.db.models import User, UserRole
 from yoink_insight.api.schemas import (
@@ -196,45 +197,31 @@ async def revoke_insight_access(
     await session.commit()
 
 
-async def _has_feature_access(session: AsyncSession, user: User, feature: str) -> bool:
-    """Check effective access for any insight plugin feature."""
-    if _is_owner(user):
-        return True
-    now = datetime.now(timezone.utc)
-    from sqlalchemy import select as sa_select
-    from yoink.core.db.models import UserPermission
-    result = await session.execute(
-        sa_select(UserPermission.id).where(
-            UserPermission.user_id == user.id,
-            UserPermission.plugin == "insight",
-            UserPermission.feature == feature,
-            (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
-        )
-    )
-    return result.scalar_one_or_none() is not None
+def _resolver_for(request: Request) -> EffectiveFeatureResolver:
+    """Build an EffectiveFeatureResolver bound to the app session_factory + bot_data."""
+    sf = request.app.state.session_factory
+    bot_data = getattr(request.app.state, "bot_data", {}) or {}
+    return EffectiveFeatureResolver(sf, bot_data)
 
 
-async def _has_insight_access(session: AsyncSession, user: User) -> bool:
-    """Check effective access: owner, user_permissions grant, or legacy insight_access row."""
-    from datetime import timezone
-    from sqlalchemy import select as sa_select
-    from yoink.core.db.models import UserPermission
+async def _has_feature_access(request: Request, user: User, feature: str) -> bool:
+    """Check effective access for any insight plugin feature.
+
+    Goes through EffectiveFeatureResolver so registered providers (e.g. BYOK
+    for insight:tldr) count as a grant. See kb:yoink:effective-feature-resolver.
+    """
     if _is_owner(user):
         return True
-    now = datetime.now(timezone.utc)
-    result = await session.execute(
-        sa_select(UserPermission.id).where(
-            UserPermission.user_id == user.id,
-            UserPermission.plugin == "insight",
-            UserPermission.feature == "summary",
-            (UserPermission.expires_at.is_(None)) | (UserPermission.expires_at > now),
-        )
-    )
-    if result.scalar_one_or_none() is not None:
+    resolver = _resolver_for(request)
+    return await resolver.is_allowed(user.id, "insight", feature, user=user)
+
+
+async def _has_insight_access(request: Request, user: User) -> bool:
+    """Check effective access for insight:summary via EffectiveFeatureResolver."""
+    if _is_owner(user):
         return True
-    # Legacy fallback
-    legacy = await session.get(InsightAccess, user.id)
-    return legacy is not None
+    resolver = _resolver_for(request)
+    return await resolver.is_allowed(user.id, "insight", "summary", user=user)
 
 
 # Reading-time heuristics for /me/stats time-saved.
@@ -480,12 +467,22 @@ async def _load_user_prompts(session: AsyncSession, user_id: int) -> dict[str, s
 
 @router.get("/settings/me", response_model=InsightUserSettingsResponse, summary="My AI summary settings")
 async def get_my_insight_settings(
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InsightUserSettingsResponse:
-    has_gemini_access = await _has_insight_access(session, current_user)
-    has_tldr = await _has_feature_access(session, current_user, "tldr")
-    has_search = await _has_feature_access(session, current_user, "search")
+    resolver = _resolver_for(request)
+    has_gemini_access = await _has_insight_access(request, current_user)
+    tldr_src = await resolver.grant_source(current_user.id, "insight", "tldr", user=current_user)
+    search_src = await resolver.grant_source(current_user.id, "insight", "search", user=current_user)
+    has_tldr = tldr_src is not None
+    has_search = search_src is not None
+    # Gateway-side controls (allowed-model picker, GitHub token, web-search
+    # routing) only make sense when the grant came from the gateway path.
+    # BYOK-only users (tldr_src == GrantSource.provider) route through their
+    # own LLM and pick their model in the BYOK card.
+    tldr_gw = tldr_src is not None and tldr_src != GrantSource.provider
+    search_gw = search_src is not None and search_src != GrantSource.provider
     config = InsightConfig()
     settings_row = await session.get(InsightUserSettings, current_user.id)
     lang = settings_row.lang if settings_row else config.insight_default_lang
@@ -498,11 +495,13 @@ async def get_my_insight_settings(
         lang=lang,
         has_gemini_access=has_gemini_access,
         has_tldr_access=has_tldr,
+        has_tldr_gateway_access=tldr_gw,
         has_search_access=has_search,
-        tldr_model=tldr_model,
-        tldr_allowed_models=allowed if has_tldr else [],
-        github_token_set=bool(github_token),
-        use_search=use_search if has_search else False,
+        has_search_gateway_access=search_gw,
+        tldr_model=tldr_model if tldr_gw else None,
+        tldr_allowed_models=allowed if tldr_gw else [],
+        github_token_set=bool(github_token) if tldr_gw else False,
+        use_search=use_search if search_gw else False,
         prompts=user_prompts,
         prompt_defaults=_get_builtin_prompt_defaults(),
         alias_defaults=_get_builtin_alias_defaults(),
@@ -512,16 +511,30 @@ async def get_my_insight_settings(
 @router.patch("/settings/me", response_model=InsightUserSettingsResponse, summary="Update my AI summary settings")
 async def update_my_insight_settings(
     body: InsightSettingsUpdate,
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InsightUserSettingsResponse:
-    has_gemini_access = await _has_insight_access(session, current_user)
-    has_tldr = await _has_feature_access(session, current_user, "tldr")
-    has_search = await _has_feature_access(session, current_user, "search")
+    resolver = _resolver_for(request)
+    has_gemini_access = await _has_insight_access(request, current_user)
+    tldr_src = await resolver.grant_source(current_user.id, "insight", "tldr", user=current_user)
+    search_src = await resolver.grant_source(current_user.id, "insight", "search", user=current_user)
+    has_tldr = tldr_src is not None
+    has_search = search_src is not None
+    tldr_gw = tldr_src is not None and tldr_src != GrantSource.provider
+    search_gw = search_src is not None and search_src != GrantSource.provider
     if not has_gemini_access and not has_tldr:
         raise HTTPException(status_code=403, detail="You do not have Insight access.")
 
     config = InsightConfig()
+
+    # Gateway-side fields (tldr_model, github_token, use_search) require a
+    # gateway-route grant. BYOK-only users route through their own LLM and
+    # have no business writing these.
+    if body.tldr_model is not None and not tldr_gw:
+        raise HTTPException(status_code=403, detail="Model selection is only available on the gateway route.")
+    if body.github_token is not None and not tldr_gw:
+        raise HTTPException(status_code=403, detail="GitHub token is only available on the gateway route.")
 
     # Validate tldr_model against allowed list (owner bypasses)
     tldr_model = body.tldr_model
@@ -530,8 +543,8 @@ async def update_my_insight_settings(
         if tldr_model not in allowed:
             raise HTTPException(status_code=400, detail=f"Model '{tldr_model}' is not in the allowed list.")
 
-    # use_search requires the 'insight:search' feature.
-    if body.use_search is True and not has_search:
+    # use_search requires a gateway-route 'insight:search' grant.
+    if body.use_search is True and not search_gw:
         raise HTTPException(status_code=403, detail="You do not have AI Search access.")
 
     settings_row = await session.get(InsightUserSettings, current_user.id)
@@ -588,11 +601,13 @@ async def update_my_insight_settings(
         lang=settings_row.lang,
         has_gemini_access=has_gemini_access,
         has_tldr_access=has_tldr,
+        has_tldr_gateway_access=tldr_gw,
         has_search_access=has_search,
-        tldr_model=settings_row.tldr_model,
-        tldr_allowed_models=allowed if has_tldr else [],
-        github_token_set=bool(settings_row.github_token),
-        use_search=settings_row.use_search if has_search else False,
+        has_search_gateway_access=search_gw,
+        tldr_model=settings_row.tldr_model if tldr_gw else None,
+        tldr_allowed_models=allowed if tldr_gw else [],
+        github_token_set=bool(settings_row.github_token) if tldr_gw else False,
+        use_search=settings_row.use_search if search_gw else False,
         prompts=user_prompts,
         prompt_defaults=_get_builtin_prompt_defaults(),
         alias_defaults=_get_builtin_alias_defaults(),
@@ -853,10 +868,11 @@ def _collect_existing_keys(rows: list[InsightTldrAlias]) -> set[str]:
 
 @router.get("/aliases", response_model=list[TldrAliasResponse], summary="List my /tldr aliases")
 async def list_my_aliases(
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[TldrAliasResponse]:
-    if not await _has_feature_access(session, current_user, "tldr"):
+    if not await _has_feature_access(request, current_user, "tldr"):
         raise HTTPException(status_code=403, detail="No TLDR access.")
     rows = (await session.execute(
         select(InsightTldrAlias)
@@ -869,10 +885,11 @@ async def list_my_aliases(
 @router.post("/aliases", response_model=TldrAliasResponse, status_code=201, summary="Create /tldr alias")
 async def create_alias(
     body: TldrAliasCreate,
+    request: Request,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> TldrAliasResponse:
-    if not await _has_feature_access(session, current_user, "tldr"):
+    if not await _has_feature_access(request, current_user, "tldr"):
         raise HTTPException(status_code=403, detail="No TLDR access.")
 
     target_alias = _validate_target_alias(body.target_alias)

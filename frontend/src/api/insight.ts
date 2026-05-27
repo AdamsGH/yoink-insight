@@ -5,7 +5,9 @@ export interface InsightSettings {
   lang: string
   has_gemini_access: boolean
   has_tldr_access: boolean
+  has_tldr_gateway_access: boolean
   has_search_access: boolean
+  has_search_gateway_access: boolean
   tldr_model: string | null
   tldr_allowed_models: string[]
   use_search: boolean

@@ -473,10 +473,12 @@ export default function InsightSettingsPage() {
         setPromptEdits({})
         setByok(byokRes.data)
         if (res.data.has_tldr_access) {
-          if (identity?.role === 'owner') {
-            loadModels()
-          } else {
-            setAllModels(res.data.tldr_allowed_models)
+          if (res.data.has_tldr_gateway_access) {
+            if (identity?.role === 'owner') {
+              loadModels()
+            } else {
+              setAllModels(res.data.tldr_allowed_models)
+            }
           }
           loadAliases()
         }
@@ -490,7 +492,7 @@ export default function InsightSettingsPage() {
     setSaving(true)
     try {
       const body: InsightSettingsPatch = { lang: lang ?? data?.lang }
-      if (data?.has_tldr_access) {
+      if (data?.has_tldr_gateway_access) {
         body.tldr_model = tldrModel ?? data?.tldr_model ?? null
         if (githubToken === '__clear__') {
           body.github_token = ''
@@ -498,7 +500,7 @@ export default function InsightSettingsPage() {
           body.github_token = githubToken
         }
       }
-      if (data?.has_search_access && useSearch !== null && useSearch !== data.use_search) {
+      if (data?.has_search_gateway_access && useSearch !== null && useSearch !== data.use_search) {
         body.use_search = useSearch
       }
       // Only send prompts that were touched in this session. Empty string =
@@ -597,9 +599,9 @@ export default function InsightSettingsPage() {
   }
 
   const langDirty = data !== null && lang !== null && lang !== data.lang
-  const tldrDirty = data !== null && data.has_tldr_access && tldrModel !== null && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
-  const githubDirty = data !== null && data.has_tldr_access && githubToken !== ''
-  const searchDirty = data !== null && data.has_search_access && useSearch !== null && useSearch !== data.use_search
+  const tldrDirty = data !== null && data.has_tldr_gateway_access && tldrModel !== null && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
+  const githubDirty = data !== null && data.has_tldr_gateway_access && githubToken !== ''
+  const searchDirty = data !== null && data.has_search_gateway_access && useSearch !== null && useSearch !== data.use_search
   const promptsDirty = Object.values(promptEdits).some(v => v !== null)
   const dirty = langDirty || tldrDirty || githubDirty || searchDirty || promptsDirty
 
@@ -654,8 +656,8 @@ export default function InsightSettingsPage() {
           </CardContent>
         </Card>
 
-        {/* AI Tools: per-user web search override */}
-        {data?.has_search_access && (
+        {/* AI Tools: per-user web search override (gateway-only) */}
+        {data?.has_search_gateway_access && (
           <Card>
             <CardHeader className="px-4 py-3">
               <div className="flex items-center justify-between gap-2">
@@ -690,18 +692,23 @@ export default function InsightSettingsPage() {
           <ByokCard data={byok} onChange={setByok} />
         )}
 
-        {/* TL;DR */}
+        {/* TL;DR card. Shown when the user has a gateway-side grant (then
+            it carries model + GitHub token), or when they have no grant at
+            all (no-access state). BYOK-only users see their model in the
+            BYOK card above, so this card is redundant for them and we
+            hide it to avoid showing a gateway model that doesn't apply. */}
+        {(data?.has_tldr_gateway_access || !data?.has_tldr_access) && (
         <Card>
           <CardHeader className="px-4 py-3">
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="flex items-center gap-2 text-base">
-                {data?.has_tldr_access
+                {data?.has_tldr_gateway_access
                   ? <Link className="h-4 w-4 shrink-0 text-primary" />
                   : <LockKeyhole className="h-4 w-4 shrink-0 text-muted-foreground" />}
                 {t('insight.tldr_title', { defaultValue: 'TL;DR' })}
               </CardTitle>
-              <span className={`text-xs font-medium ${data?.has_tldr_access ? 'text-primary' : 'text-muted-foreground'}`}>
-                {data?.has_tldr_access
+              <span className={`text-xs font-medium ${data?.has_tldr_gateway_access ? 'text-primary' : 'text-muted-foreground'}`}>
+                {data?.has_tldr_gateway_access
                   ? t('insight.tldr_access_active', { defaultValue: 'active' })
                   : t('insight.tldr_no_access_short', { defaultValue: 'no access' })}
               </span>
@@ -710,7 +717,7 @@ export default function InsightSettingsPage() {
           <CardContent className="px-4 pb-2">
             <div className="space-y-0">
 
-              {data?.has_tldr_access && (
+              {data?.has_tldr_gateway_access && (
                 <div className="py-2 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm leading-snug">{t('insight.tldr_model_label', { defaultValue: 'LLM model' })}</p>
@@ -745,7 +752,7 @@ export default function InsightSettingsPage() {
                 </div>
               )}
 
-              {data?.has_tldr_access && (
+              {data?.has_tldr_gateway_access && (
                 <div className="py-2 space-y-1.5">
                   <div className="flex items-center gap-2">
                     <p className="text-sm leading-snug">{t('insight.github_token_label', { defaultValue: 'GitHub token' })}</p>
@@ -782,6 +789,7 @@ export default function InsightSettingsPage() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Save */}
         {dirty && (
