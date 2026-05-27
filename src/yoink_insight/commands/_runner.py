@@ -27,6 +27,11 @@ _THINKING_DELAY = 8.0
 # Minimum characters accumulated before sending a draft update.
 _DRAFT_MIN_CHARS = 80
 
+# Minimum seconds between two draft updates. Telegram throttles editMessage
+# (and the draft wrapper around it) hard around ~1/s per chat; bursting past
+# that triggers Flood control on every subsequent edit until the stream ends.
+_DRAFT_MIN_INTERVAL = 1.5
+
 
 def _draft_id(message_id: int) -> int:
     """Stable per-chat draft id: the user's command-message id."""
@@ -115,11 +120,16 @@ async def run_insight_command(
 
     accumulated = ""
     last_sent_len = 0
+    last_sent_at = 0.0
 
     try:
         async for chunk in summarizer.stream_command(url, lang, command, prompt_override=prompt_override):
             accumulated += chunk
-            if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:
+            now = asyncio.get_event_loop().time()
+            if (
+                len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS
+                and now - last_sent_at >= _DRAFT_MIN_INTERVAL
+            ):
                 try:
                     await bot.send_message_draft(
                         chat_id=chat_id,
@@ -129,6 +139,7 @@ async def run_insight_command(
                         message_thread_id=thread_id,
                     )
                     last_sent_len = len(accumulated)
+                    last_sent_at = now
                 except Exception as draft_err:
                     logger.debug("sendMessageDraft failed (non-fatal): %s", draft_err)
 

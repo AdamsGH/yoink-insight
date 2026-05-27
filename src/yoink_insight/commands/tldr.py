@@ -1,6 +1,7 @@
 """/tldr <url> [question] - fetch and summarise any URL via gateway LLM."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from telegram import Message, MessageEntity, Update
@@ -33,6 +34,11 @@ logger = logging.getLogger(__name__)
 # Send a draft update each time the buffered output grows by at least this many
 # characters since the last push.
 _DRAFT_MIN_CHARS = 80
+
+# Minimum seconds between two draft updates. Telegram throttles editMessage
+# (and the draft wrapper around it) around ~1/s per chat; without this gate a
+# fast-streaming model floods Bot API with Flood-control 429s on every chunk.
+_DRAFT_MIN_INTERVAL = 1.5
 
 
 def _draft_id_for(msg: Message) -> int:
@@ -105,6 +111,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_model = await settings.get_tldr_model(user_id)
     user_github_token = await settings.get_github_token(user_id)
     byok_route = await resolve_tldr_route(user_id, context)
+    route = "byok" if byok_route is not None else "gateway"
 
     entries = await _load_user_alias_entries(context, user_id)
 
@@ -164,35 +171,16 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         except BadRequest:
             await update.message.reply_text(header_line + plain_body)
-        await usage_repo.log(user_id, "tldr", lang=lang, status="cached", alias_key=alias_key)
+        await usage_repo.log(user_id, "tldr", lang=lang, status="cached", alias_key=alias_key, route=route)
         return
 
-    # Start the draft immediately with empty text - Telegram renders an
-    # animated "Thinking..." placeholder until the first real chunk lands,
-    # then animates it into the streamed text in-place. The placeholder and
-    # the streamed body share the same draft id, so nothing jumps in the
-    # chat.
-    #
-    # PTB's client-side validator refuses text="" even though Bot API 10.0
-    # explicitly allows it for sendMessageDraft ("Pass an empty text to
-    # show a Thinking... placeholder"). We bypass the validator by going
-    # through api_kwargs: send_message_draft with a single space as text
-    # plus api_kwargs={"text": ""} - the api_kwargs payload wins on the
-    # final JSON serialisation.
+    # Bot API 10.0 docs claim sendMessageDraft accepts text="" to render a
+    # "Thinking..." placeholder, but the live server still rejects it with
+    # "Text must be non-empty". Until that lands, we just skip the initial
+    # placeholder and start the draft on the first real chunk below; the
+    # standard chat-action typing indicator (set elsewhere in the runner)
+    # carries the "working" cue in the meantime.
     draft_active = False
-    try:
-        await bot.send_message_draft(
-            chat_id=chat_id,
-            draft_id=draft_id,
-            text=" ",
-            message_thread_id=thread_id,
-            api_kwargs={"text": ""},
-        )
-        draft_active = True
-    except Exception as draft_err:
-        # Group chats and old clients fall back to a plain space placeholder;
-        # the streaming chunks below will replace it shortly anyway.
-        logger.debug("Initial empty draft failed (non-fatal): %s", draft_err)
 
     async def _report_error(code: str, *, prepared_chars: int | None = None, prepared_seconds: int | None = None) -> None:
         err_text = t(f"tldr.error.{code}", lang, fallback=t("insight.error.generic", lang))
@@ -205,6 +193,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             alias_key=alias_key,
             content_chars=prepared_chars,
             video_seconds=prepared_seconds,
+            route=route,
         )
 
     # Fetch content + metrics first so they're available even if streaming fails.
@@ -218,6 +207,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     accumulated = ""
     last_sent_len = 0
 
+    last_sent_at = 0.0
     try:
         async for chunk in stream_llm(
             prepared, lang, config,
@@ -228,7 +218,11 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             byok=byok_route,
         ):
             accumulated += chunk
-            if len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS:
+            now = asyncio.get_event_loop().time()
+            if (
+                len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS
+                and now - last_sent_at >= _DRAFT_MIN_INTERVAL
+            ):
                 try:
                     draft_plain, draft_entities = md_to_entities(accumulated.strip())
                     draft_header_line = f"{header}\n\n"
@@ -248,6 +242,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     )
                     draft_active = True
                     last_sent_len = len(accumulated)
+                    last_sent_at = now
                 except Exception as draft_err:
                     logger.debug("sendMessageDraft failed (non-fatal): %s", draft_err)
 
@@ -310,6 +305,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         alias_key=alias_key,
         content_chars=len(prepared.content),
         video_seconds=prepared.video_seconds,
+        route=route,
     )
 
     del draft_active  # presence is for future cleanup hooks

@@ -372,6 +372,42 @@ async def stream_chat(
             yield chunk
 
 
+def _extract_provider_message(raw: bytes) -> str:
+    """Pull the human-readable error from an OpenAI/OpenRouter/Anthropic JSON body.
+
+    Falls back to the truncated raw bytes when the payload is not JSON or has
+    no recognisable `error.message` field.
+    """
+    snippet = raw[:400]
+    try:
+        payload = json.loads(snippet)
+    except Exception:
+        return snippet.decode("utf-8", errors="replace")
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(err, dict):
+        msg = err.get("message")
+        if isinstance(msg, str) and msg:
+            return msg
+    if isinstance(err, str) and err:
+        return err
+    return snippet.decode("utf-8", errors="replace")
+
+
+def _classify_provider_status(status: int) -> str:
+    """Map an upstream HTTP status onto a stable BYOKError code."""
+    if status in (401, 403):
+        return "auth_failed"
+    if status == 402:
+        return "insufficient_credits"
+    if status == 429:
+        return "provider_rate_limited"
+    if status == 404:
+        return "model_not_found"
+    if status >= 500:
+        return "provider_unavailable"
+    return "llm_error"
+
+
 async def _stream_openai(
     base_url: str, api_key: str, model: str, prompt: str
 ) -> AsyncIterator[str]:
@@ -385,9 +421,13 @@ async def _stream_openai(
         try:
             async with client.stream("POST", endpoint, json=body, headers=_openai_headers(api_key)) as resp:
                 if resp.status_code != 200:
-                    err = (await resp.aread())[:200]
-                    logger.error("byok openai stream %d: %s", resp.status_code, err)
-                    raise BYOKError("llm_error")
+                    raw = await resp.aread()
+                    message = _extract_provider_message(raw)
+                    code = _classify_provider_status(resp.status_code)
+                    logger.error(
+                        "byok openai stream %d (%s): %s", resp.status_code, code, message
+                    )
+                    raise BYOKError(code)
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -402,8 +442,12 @@ async def _stream_openai(
                     except Exception:
                         continue
         except httpx.RequestError as exc:
-            logger.error("byok openai stream request failed: %s", exc)
-            raise BYOKError("llm_error") from exc
+            logger.error(
+                "byok openai stream request failed (%s): %s",
+                type(exc).__name__,
+                exc or "connection closed",
+            )
+            raise BYOKError("network_error") from exc
 
 
 async def _stream_anthropic(
@@ -429,9 +473,13 @@ async def _stream_anthropic(
         try:
             async with client.stream("POST", endpoint, json=body, headers=headers) as resp:
                 if resp.status_code != 200:
-                    err = (await resp.aread())[:200]
-                    logger.error("byok anthropic stream %d: %s", resp.status_code, err)
-                    raise BYOKError("llm_error")
+                    raw = await resp.aread()
+                    message = _extract_provider_message(raw)
+                    code = _classify_provider_status(resp.status_code)
+                    logger.error(
+                        "byok anthropic stream %d (%s): %s", resp.status_code, code, message
+                    )
+                    raise BYOKError(code)
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -451,8 +499,12 @@ async def _stream_anthropic(
                     if text:
                         yield text
         except httpx.RequestError as exc:
-            logger.error("byok anthropic stream request failed: %s", exc)
-            raise BYOKError("llm_error") from exc
+            logger.error(
+                "byok anthropic stream request failed (%s): %s",
+                type(exc).__name__,
+                exc or "connection closed",
+            )
+            raise BYOKError("network_error") from exc
 
 
 # ---------------------------------------------------------------------------

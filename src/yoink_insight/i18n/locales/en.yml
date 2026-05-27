@@ -52,6 +52,11 @@ tldr:
     llm_error: "Summary service error. Please try again later."
     rate_limited: "Daily TLDR quota reached ({limit} calls/day). Try again after UTC midnight."
     auth_failed: "Your provider rejected the API key. Re-check it in AI settings."
+    insufficient_credits: "Your provider account is out of credits or the per-request limit is too low. Top up your balance or pick a cheaper model in AI settings."
+    provider_rate_limited: "Your provider is rate-limiting requests. Wait a minute and try again, or switch model in AI settings."
+    model_not_found: "Your provider does not know this model. Pick another one in AI settings."
+    provider_unavailable: "Your provider is down right now. Try again in a few minutes."
+    network_error: "Could not reach the LLM provider (network error). Try again."
 
 insight_lang:
   current: "Current language: <b>{language}</b>"
