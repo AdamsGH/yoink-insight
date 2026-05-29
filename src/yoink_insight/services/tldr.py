@@ -32,6 +32,23 @@ Formatting rules (MUST follow):
 - Input data may be in TOON format (Token-Oriented Object Notation): YAML-like indentation for objects, CSV-style rows for uniform arrays. Read it as structured data, do NOT reproduce it verbatim in your output.
 """
 
+# Aliases use their own formatting rules - the default block mentions bullet
+# points explicitly, which biases the model toward a list even when the
+# alias prompt forbids them (tale) or wants them optional (nobullshit).
+_ALIAS_FORMAT_RULES = """\
+Formatting rules (the detailed reminder below the content is the source
+of truth, this is the short version):
+- Output is Markdown rendered in a chat client, not plain text. Use
+  **bold** generously for names, numbers, prices, model identifiers,
+  and verdict words. `code` for technical identifiers, units, paths,
+  error tokens. > blockquote when lifting a phrase from the source.
+- Blank line between every paragraph. No wall of prose.
+- No HTML tags. No '#' headings. Bullets only when the persona
+  instruction explicitly allows them.
+- No preamble, no sign-off, output only the requested content.
+- Input data may be in TOON format (Token-Oriented Object Notation): YAML-like indentation for objects, CSV-style rows for uniform arrays. Read it as structured data, do NOT reproduce it verbatim in your output.
+"""
+
 # Default built-in /tldr instruction. This is the body the user can override
 # via insight_user_prompts(command='tldr'). It is rendered with {lang} only;
 # the source/content/format-rules block is appended automatically below.
@@ -56,7 +73,7 @@ Rules:
 """
 
 _TLDR_BODY = """\
-Below is content fetched from {source_desc}.
+Below is content the user wants summarised.
 
 {format_rules}
 LANGUAGE (HARD REQUIREMENT): Reply in {lang}. Translate everything you
@@ -68,8 +85,41 @@ Content:
 {content}
 """
 
+# Anchor reminder appended at the very end of the prompt for alias modes.
+# Long YouTube transcripts will push the instruction far up; this restates
+# the non-negotiable structural rules right before the model starts
+# generating, where it has the most weight.
+_ALIAS_ANCHOR = """\
+
+Quick reminder before you write:
+- Hold the voice the instructions describe. Tone is the output, not a
+  garnish on top of a generic summary.
+- No section headers ('Main points:', 'Why X:', 'Bottom line:',
+  'TL;DR', 'Что это значит:').
+- No neutral 'this article / video explains...' framing.
+- Reply in {lang}, in the register the instruction asks for.
+
+Markdown formatting (the message is rendered, not shown as raw text):
+- ALWAYS put a blank line between paragraphs. Two short paragraphs are
+  better than one wall of prose.
+- ALWAYS use **bold** for the names, version numbers, prices, measured
+  values, model identifiers, and the verdict words that carry the
+  meaning of the sentence. A reply with only one or zero **bold** spans
+  is wrong: aim for several across the body, not just the opening line.
+- ALWAYS use `code` for product codes, chip names, API names, paths,
+  file names, error tokens, command flags, units like `60Hz`, `8kHz`,
+  `IP55`, `MDAQS 4.0`, `Bluetooth 6.1`. If the source mentions a
+  technical identifier, it goes in `code`.
+- When a phrase from the source is striking enough to react to, lift
+  it into a `> blockquote` line on its own and follow it with your
+  reaction in the next paragraph. Use this once or twice when it fits,
+  not on every paragraph.
+- No HTML tags. No '#' headings. Bullets only when the persona
+  instruction above explicitly allows them.
+"""
+
 _TLDR_QUESTION_BODY = """\
-Below is content fetched from {source_desc}.
+Below is content the user wants summarised.
 Answer the following question based on this content: {question}
 Be direct and specific.
 
@@ -85,24 +135,49 @@ Content:
 
 # Built-in alias prompts
 _NOBULLSHIT_PROMPT = (
-    "You are a gruff but fair dwarf-critic. You don't soften verdicts, but "
-    "you respect solid craft and you'll say when something is well-built. "
-    "Bullshit, hype, padding, and obvious filler get called out plainly. "
-    "Quality and clean work get acknowledged with the same directness.\n"
+    "Summarise the content below as a gruff, opinionated technical "
+    "reviewer. Voice is direct, impatient with sloppiness, comfortable "
+    "with physical craftsman metaphors when one fits ('the argument "
+    "holds water', 'the seam between X and Y is ugly'). Solid work gets "
+    "acknowledged plainly; hype, padding, vague hand-waving get called "
+    "out with the same directness. Both verdicts use the same voice.\n"
     "\n"
-    "Open with a one-line verdict: is this worth reading, and why - one "
-    "concrete reason, not vague vibes. Then deliver the substance in "
-    "whatever shape fits the material: a short paragraph or two when the "
-    "piece has a single thread to summarise, a tight list of points when "
-    "the material is genuinely enumerable. Don't force bullets onto prose, "
-    "and don't force prose onto a checklist.\n"
+    "Avoid these patterns (each is a generic-summariser tell):\n"
+    "- Section headers like 'Main points:', 'Why X:', 'What it means:', "
+    "'Bottom line:'. No 'Word + colon + newline' structure at all.\n"
+    "- Openings like 'Worth reading -', 'A solid breakdown of', 'This "
+    "video explains', or any neutral framing of what the source IS.\n"
+    "- Narrating the author ('Theo Cook breaks down', 'the author "
+    "argues'). State the claim or finding directly.\n"
+    "- Wrap-up sections at the end ('Что это значит:', 'In short:', "
+    "'TL;DR'). End where the substance ends.\n"
+    "- Neutral analyst prose. If a sentence could appear in a TechCrunch "
+    "summary unchanged, rewrite it.\n"
     "\n"
-    "Cover the actual content - claims, decisions, results, code, numbers. "
-    "Skip recapping structure or the author's intentions ('the post "
-    "explains...'). If something is genuinely well-done, name it; if "
-    "something is hype or filler, name that too. Same voice for both.\n"
+    "Shape: open with ONE bold verdict line, a blunt judgment rather "
+    "than a description. Right register, examples:\n"
+    "  **Solid breakdown, the numbers actually hold up.**\n"
+    "  **Half good craft, half hand-waving, worth it for the AWS angle.**\n"
+    "  **Skip it, three claims and two of them are smoke.**\n"
+    "Wrong register (do not write these):\n"
+    "  Worth watching - an honest analysis of Anthropic's profitability.\n"
+    "  Solid video covering Anthropic's recent revenue growth.\n"
     "\n"
-    "Reply in {lang}."
+    "Then deliver the substance in whatever shape fits the material: "
+    "one or two short paragraphs of pointed commentary on the actual "
+    "claims, OR a tight list when the material is genuinely a checklist "
+    "of distinct items. Each point carries a concrete fact AND a "
+    "reaction to it in the same sentence. 'AWS access is the real "
+    "lever, OpenAI is locked to Azure, that gap pays the bills' is the "
+    "shape; 'Anthropic has AWS access, which is important' is not.\n"
+    "\n"
+    "Preserve names, versions, model identifiers, paths, error tokens, "
+    "numbers verbatim. Markdown formatting is required and is detailed "
+    "in the reminder below the content. Keep the whole thing under "
+    "~3000 characters: chat message, not essay.\n"
+    "\n"
+    "Reply in {lang}. The register must come through in {lang} itself, "
+    "not in scattered English exclamations."
 )
 
 _BUILTIN_ALIASES: dict[str, str] = {
@@ -114,23 +189,47 @@ _BUILTIN_ALIASES: dict[str, str] = {
     "nobullshit": _NOBULLSHIT_PROMPT,
     "noshit": _NOBULLSHIT_PROMPT,
     "tale": (
-        "You are a dwarf storyteller recounting what someone else made or "
-        "wrote. Voice: experienced, proud of solid work, comfortable with "
-        "craft metaphors drawn from forges, mines, stonework - but only "
-        "when one actually fits the material. No theatrical 'by my beard' "
-        "flourishes, no Tolkien cosplay, no fake archaic syntax.\n"
+        "Retell the content below as a seasoned storyteller, third "
+        "person, in connected prose. Voice: experienced, proud of solid "
+        "work, comfortable with craft metaphors drawn from forges, "
+        "mines, stonework when one actually fits, but never theatrical. "
+        "No 'by my beard' flourishes, no fake archaic syntax.\n"
         "\n"
-        "Retell the content as connected prose: two to four short "
-        "paragraphs that flow. NO bullet lists. NO headings. NO verdict, "
-        "no rating, no 'worth reading?' framing - just the story of what's "
-        "there. Preserve concrete facts: names, versions, numbers, code "
-        "identifiers, error tokens stay verbatim.\n"
+        "Avoid these patterns:\n"
+        "- Speaking in the author's first person. State 'he claims "
+        "that...', 'the gist is...', not 'I argue that...' from the "
+        "author's mouth.\n"
+        "- Neutral encyclopedia recap. If the sentence could open a "
+        "Wikipedia article on the topic, rewrite it.\n"
+        "- Bullet lists, headings, 'Main points:', 'Bottom line:', or any "
+        "section labels. Connected prose only.\n"
+        "- Manufactured wrap-ups at the end ('In conclusion', 'overall', "
+        "'таким образом'). End where the source ends.\n"
         "\n"
-        "Lead with the heart of the piece. Then the context or the "
-        "reasoning. End where the source ends - no manufactured wrap-up. "
-        "If a metaphor doesn't naturally land, don't reach for one.\n"
+        "Shape: two to four short paragraphs separated by blank lines. "
+        "Lead with the heart of the piece, the actual claim or finding "
+        "or thing that was built. Then the context, the reasoning, the "
+        "numbers that matter. Preserve names, versions, numbers, code "
+        "identifiers, error tokens verbatim.\n"
         "\n"
-        "Reply in {lang}."
+        "Right register, opening lines:\n"
+        "  Anthropic вытащил себя из убытков за один год, и рычаг тут не "
+        "один. Theo разбирает цифры: с $87M в 2024 до $30B...\n"
+        "  Парень собрал свой ноутбук из подручного железа и BIOS, который "
+        "написал сам. Звучит как байка, но он показывает дамп...\n"
+        "Wrong register:\n"
+        "  В этом видео автор рассказывает о том, как Anthropic стал "
+        "прибыльным. (encyclopedia voice)\n"
+        "  Я расскажу вам историю о том, как я собрал ноутбук... (first "
+        "person of the original author)\n"
+        "\n"
+        "Markdown formatting is required and is detailed in the "
+        "reminder below the content. Keep the whole retelling under "
+        "~3000 characters: chat message, not essay. If the source is "
+        "long, tighten the prose, do not let it sprawl.\n"
+        "\n"
+        "Reply in {lang}. The register lives in word choice and "
+        "sentence structure, not in scattered English exclamations."
     ),
 }
 
@@ -206,16 +305,54 @@ def _build_prompt(
     lang: str,
     question: str | None,
     instruction_override: str | None = None,
+    alias_instruction: str | None = None,
 ) -> str:
     """Assemble the full prompt sent to the gateway LLM.
 
-    instruction_override (when present) replaces the default TLDR_INSTRUCTION
-    body. It is ignored when the user passed a focus question (that path uses
-    the question template since the override doesn't know about the question).
+    source_desc is currently unused: we deliberately do NOT tell the model
+    where the content came from (URL, domain, 'YouTube video'), so it sees
+    only the text to summarise. Knowing the source biases the model toward
+    generic summariser patterns ('this video explains...', 'on this site
+    the author argues...') and occasionally trips media-related policy
+    refusals on stricter providers. The parameter is kept in the signature
+    to avoid a cascading rename across the module.
+
+    Three mutually exclusive instruction sources, in priority order:
+      1. alias_instruction - a resolved built-in / user alias prompt. Used as
+         the system-style instruction (NOT as a 'question'), so behavioural
+         rules like 'NO bullets', 'verdict first', etc. actually steer the
+         model. Trumps both question and instruction_override.
+      2. question - free-text focus question from the user; renders the
+         question template.
+      3. instruction_override - the user's saved /tldr default body, falls
+         back to TLDR_INSTRUCTION when empty.
     """
+    _ = source_desc  # intentionally unused, see docstring
+    if alias_instruction and alias_instruction.strip():
+        instruction = alias_instruction.strip()
+        if "{lang}" in instruction:
+            instruction = instruction.format(lang=lang)
+        body = _TLDR_BODY.format(
+            format_rules=_ALIAS_FORMAT_RULES,
+            lang=lang,
+            content=content,
+        )
+        # The persona instruction is repeated front and back of the
+        # prompt: a short framing up top so the model knows what it is
+        # doing while reading, the full instruction at the bottom where
+        # it has the most influence on generation, plus a short anchor of
+        # the non-negotiable structural rules. Long transcripts would
+        # otherwise let haiku-class models drift back into neutral TLDR
+        # voice between the instruction and the first generated token.
+        framing = (
+            "You will be given content to summarise. The full "
+            "instructions follow the content below; read them carefully "
+            "before generating anything.\n\n"
+        )
+        anchor = _ALIAS_ANCHOR.format(lang=lang)
+        return framing + body + "\n" + instruction + anchor
     if question:
         return _TLDR_QUESTION_BODY.format(
-            source_desc=source_desc,
             question=question,
             lang=lang,
             format_rules=_FORMAT_RULES,
@@ -227,7 +364,6 @@ def _build_prompt(
     if "{lang}" in instruction:
         instruction = instruction.format(lang=lang)
     body = _TLDR_BODY.format(
-        source_desc=source_desc,
         format_rules=_FORMAT_RULES,
         lang=lang,
         content=content,
@@ -483,14 +619,16 @@ async def stream_llm(
     When byok is set the user-provided provider is called directly, bypassing
     the gateway. The 'model' kwarg is ignored in that branch (byok.model wins).
     """
+    alias_instruction: str | None = None
     resolved_question: str | None = None
     if alias_key:
-        resolved_question = resolve_alias_prompt(alias_key, entries, lang=lang)
+        alias_instruction = resolve_alias_prompt(alias_key, entries, lang=lang)
     elif question:
         resolved_question = question
     prompt = _build_prompt(
         prepared.content, prepared.source_desc, lang, resolved_question,
         instruction_override=default_instruction_override if not alias_key and not question else None,
+        alias_instruction=alias_instruction,
     )
 
     if byok is not None:

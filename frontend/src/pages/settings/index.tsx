@@ -34,8 +34,8 @@ interface BuiltinAliasDef {
 
 const BUILTIN_ALIAS_DEFS: BuiltinAliasDef[] = [
   { aliases: ['max'], target: 'max', desc: 'Thorough breakdown: all key points, technical details, bold headings.' },
-  { aliases: ['nobullshit', 'noshit'], target: 'nobullshit', desc: 'Gruff but fair dwarf-critic. One-line verdict, calls out hype, names solid craft when it sees it.' },
-  { aliases: ['tale'], target: 'tale', desc: 'Connected prose from a dwarf storyteller. 2-4 paragraphs, no lists, no verdict.' },
+  { aliases: ['nobullshit', 'noshit'], target: 'nobullshit', desc: 'Gruff, opinionated reviewer. Bold verdict on top, then pointed commentary on the actual claims. Calls out hype, acknowledges solid craft in the same voice.' },
+  { aliases: ['tale'], target: 'tale', desc: 'Connected prose retelling, third person. 2-4 short paragraphs, no lists, no verdict, no wrap-up.' },
 ]
 
 // ---- Tag input ----

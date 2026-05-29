@@ -14,6 +14,7 @@ Supported:
   [text](url)
   # headings -> bold line
   - / * bullet lists -> bullet char prefix
+  > blockquote -> Telegram 'blockquote' entity over the quoted lines
 """
 from __future__ import annotations
 
@@ -117,6 +118,10 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
             append_text("\n")
 
     _in_list_item = False
+    # Stack of (utf16_start) markers for open blockquote tokens. Telegram
+    # 'blockquote' is a single entity over the whole quoted region; we
+    # emit it on the matching close.
+    _bq_starts: list[int] = []
 
     for tok in tokens:
         t = tok.type
@@ -129,7 +134,36 @@ def md_to_entities(text: str) -> tuple[str, list[dict]]:
                 newline_if_needed()
         elif t == "paragraph_close":
             if not _in_list_item:
-                append_text("\n")
+                # Two newlines so the gap between paragraphs survives
+                # as a blank line in the final plain text. The trailing
+                # 'collapse triple+ newlines' pass clips runs of more
+                # than two, so adjacent blocks (lists, blockquotes,
+                # headings) that also emit their own '\n\n' do not
+                # stack into thick gaps.
+                append_text("\n\n")
+
+        elif t == "blockquote_open":
+            newline_if_needed()
+            _bq_starts.append(pos())
+        elif t == "blockquote_close":
+            if _bq_starts:
+                start = _bq_starts.pop()
+                length = pos() - start
+                # Trim trailing newlines from the entity span: parser
+                # closes the quote AFTER the paragraph_close newline, but
+                # Telegram renders the quote bar one line lower if the
+                # entity span includes that trailing '\n'.
+                trailing = 0
+                tail_chars = "".join(chars)
+                while length - trailing > 0 and tail_chars[-(trailing + 1):][:1] == "\n":
+                    trailing += 1
+                effective_len = length - trailing
+                if effective_len > 0:
+                    entities.append({
+                        "type": "blockquote",
+                        "offset": start,
+                        "length": effective_len,
+                    })
 
         elif t == "heading_open":
             newline_if_needed()

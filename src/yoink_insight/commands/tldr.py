@@ -29,6 +29,14 @@ from yoink_insight.services.tldr import (
     stream_llm,
 )
 
+# Telegram hard cap is 4096 UTF-16 code units per message. We keep a safety
+# margin: the body must fit under TG_BODY_LIMIT_U16 after the header line
+# (header + "\n\n") is prepended. The streamed draft uses TG_DRAFT_LIMIT_U16,
+# which is tighter so a still-growing accumulated string has room for one
+# more chunk before crossing 4096.
+_TG_HARD_LIMIT_U16 = 4096
+_TG_DRAFT_LIMIT_U16 = 3800
+
 logger = logging.getLogger(__name__)
 
 # Send a draft update each time the buffered output grows by at least this many
@@ -45,6 +53,88 @@ def _draft_id_for(msg: Message) -> int:
     """Stable per-chat draft id. We reuse the user's message id, which is
     unique within the chat and stable for the lifetime of the request."""
     return msg.message_id
+
+
+def _split_markdown_for_telegram(body: str, header_u16: int, hard_limit_u16: int = _TG_HARD_LIMIT_U16) -> list[str]:
+    """Split a markdown body into chunks that each fit under hard_limit_u16
+    UTF-16 code units AFTER the header line is prepended.
+
+    Splits preferentially on blank lines (paragraph boundary), then single
+    newlines, then sentence punctuation, then whitespace. Code fences are
+    kept intact when possible: a chunk never starts or ends in the middle
+    of a ```fenced block``` unless the fence itself is bigger than the
+    available budget (in which case it is split as a last resort).
+
+    The first chunk's budget is hard_limit_u16 - header_u16 (header sits on
+    chunk #1 only); subsequent chunks use the full hard_limit_u16.
+    """
+    body = body.strip()
+    if not body:
+        return []
+
+    chunks: list[str] = []
+    remaining = body
+    is_first = True
+
+    while remaining:
+        budget = hard_limit_u16 - (header_u16 if is_first else 0)
+        if _utf16_len(remaining) <= budget:
+            chunks.append(remaining.strip())
+            break
+
+        # Find the largest prefix that fits the budget. We approximate the
+        # cut point in characters first (UTF-16 len >= char len), then
+        # tighten by walking back to a logical boundary.
+        cut = _find_cut_index(remaining, budget)
+        head = remaining[:cut].rstrip()
+        tail = remaining[cut:].lstrip()
+
+        # If a code fence is open in `head` (odd number of ``` markers),
+        # close it for the chunk and reopen it for the tail so each chunk
+        # is independently parseable.
+        if head.count("```") % 2 == 1:
+            head = head + "\n```"
+            tail = "```\n" + tail
+
+        chunks.append(head)
+        remaining = tail
+        is_first = False
+
+    return chunks
+
+
+def _find_cut_index(s: str, budget_u16: int) -> int:
+    """Return a character index where s can be split so the prefix fits
+    budget_u16 UTF-16 code units, preferring paragraph > line > sentence >
+    word > raw cut. Always returns a positive int (>= 1) so the loop in
+    _split_markdown_for_telegram makes progress.
+    """
+    # Walk forward accumulating UTF-16 length until we'd exceed the budget;
+    # max_idx is the largest valid raw cut.
+    acc = 0
+    max_idx = len(s)
+    for i, c in enumerate(s):
+        step = 2 if ord(c) > 0xFFFF else 1
+        if acc + step > budget_u16:
+            max_idx = i
+            break
+        acc += step
+    if max_idx <= 0:
+        return 1
+
+    window = s[:max_idx]
+    # Prefer a blank-line boundary in the second half of the window.
+    half = max_idx // 2
+    for sep in ("\n\n", "\n", ". ", "? ", "! ", "; ", ", ", " "):
+        idx = window.rfind(sep)
+        if idx >= half:
+            return idx + len(sep)
+    # Fall back to whatever we have past halfway, else the raw cut.
+    for sep in ("\n\n", "\n", ". ", "? ", "! ", "; ", " "):
+        idx = window.rfind(sep)
+        if idx > 0:
+            return idx + len(sep)
+    return max_idx
 
 
 async def _load_user_alias_entries(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> list[UserAliasEntry]:
@@ -155,22 +245,56 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     draft_id = _draft_id_for(update.message)
     reply_to = update.message.message_id
 
-    if cached:
-        plain_body, body_entities = md_to_entities(cached)
+    async def _send_body_chunks(body_md: str) -> None:
+        """Render body_md to entities and send it as one or more messages.
+
+        The header (bold + text_link) is attached to chunk #1 only. Each
+        chunk is parsed independently via md_to_entities, so entity
+        offsets stay valid even when the body has to be split across
+        Telegram's 4096 UTF-16 limit. Falls back to plain text if the
+        entities trip a BadRequest.
+        """
         header_line = f"{header}\n\n"
-        offset_shift = _utf16_len(header_line)
-        final_entities = _header_entities() + [
-            MessageEntity(type=e["type"], offset=e["offset"] + offset_shift,
-                          length=e["length"], url=e.get("url"))
-            for e in body_entities
-        ]
-        try:
-            await update.message.reply_text(
-                header_line + plain_body,
-                entities=final_entities,
-            )
-        except BadRequest:
-            await update.message.reply_text(header_line + plain_body)
+        header_u16 = _utf16_len(header_line)
+        md_chunks = _split_markdown_for_telegram(body_md, header_u16)
+        for i, md_chunk in enumerate(md_chunks):
+            plain_part, part_entities = md_to_entities(md_chunk)
+            if i == 0:
+                text = header_line + plain_part
+                offset_shift = header_u16
+                ents = _header_entities() + [
+                    MessageEntity(type=e["type"], offset=e["offset"] + offset_shift,
+                                  length=e["length"], url=e.get("url"))
+                    for e in part_entities
+                ]
+                reply_arg: int | None = reply_to
+            else:
+                text = plain_part
+                ents = [
+                    MessageEntity(type=e["type"], offset=e["offset"],
+                                  length=e["length"], url=e.get("url"))
+                    for e in part_entities
+                ]
+                reply_arg = None
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    entities=ents,
+                    reply_to_message_id=reply_arg,
+                    message_thread_id=thread_id,
+                )
+            except BadRequest as exc:
+                logger.warning("send_message with entities failed (%s), falling back to plain", exc)
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_to_message_id=reply_arg,
+                    message_thread_id=thread_id,
+                )
+
+    if cached:
+        await _send_body_chunks(cached)
         await usage_repo.log(user_id, "tldr", lang=lang, status="cached", alias_key=alias_key, route=route)
         return
 
@@ -181,6 +305,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # standard chat-action typing indicator (set elsewhere in the runner)
     # carries the "working" cue in the meantime.
     draft_active = False
+    draft_disabled = False
 
     async def _report_error(code: str, *, prepared_chars: int | None = None, prepared_seconds: int | None = None) -> None:
         err_text = t(f"tldr.error.{code}", lang, fallback=t("insight.error.generic", lang))
@@ -219,6 +344,8 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ):
             accumulated += chunk
             now = asyncio.get_event_loop().time()
+            if draft_disabled:
+                continue
             if (
                 len(accumulated) - last_sent_len >= _DRAFT_MIN_CHARS
                 and now - last_sent_at >= _DRAFT_MIN_INTERVAL
@@ -228,6 +355,15 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     draft_header_line = f"{header}\n\n"
                     draft_offset = _utf16_len(draft_header_line)
                     draft_full_text = draft_header_line + draft_plain
+                    # Once the streamed accumulator outgrows what one
+                    # Telegram message can hold, drafts stop being useful:
+                    # editMessage rejects them with Message_too_long and
+                    # every subsequent chunk re-fails. Turn drafts off
+                    # for the rest of the stream; the final send below
+                    # splits the body into multiple messages anyway.
+                    if _utf16_len(draft_full_text) > _TG_DRAFT_LIMIT_U16:
+                        draft_disabled = True
+                        continue
                     draft_full_entities = _header_entities() + [
                         MessageEntity(type=e["type"], offset=e["offset"] + draft_offset,
                                       length=e["length"], url=e.get("url"))
@@ -256,43 +392,18 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _report_error("empty_response", prepared_chars=len(prepared.content), prepared_seconds=prepared.video_seconds)
         return
 
-    # Convert markdown body to plain text + MessageEntity list.
-    plain_body, body_entities = md_to_entities(body)
-    header_line = f"{header}\n\n"
-    offset_shift = _utf16_len(header_line)
-    final_text = header_line + plain_body
-    final_entities = _header_entities() + [
-        MessageEntity(
-            type=e["type"],
-            offset=e["offset"] + offset_shift,
-            length=e["length"],
-            url=e.get("url"),
-        )
-        for e in body_entities
-    ]
-
     # The active draft is ephemeral and auto-expires when sendMessage lands
     # for the same chat; we don't have to delete it explicitly (and there's
     # no API for that anyway). Per Telegram docs: "the streamed draft is
     # ephemeral and acts as a temporary 30-second preview - once the output
     # is finalized, you must call sendMessage with the complete message to
     # persist it in the user's chat".
-    try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=final_text,
-            entities=final_entities,
-            reply_to_message_id=reply_to,
-            message_thread_id=thread_id,
-        )
-    except BadRequest as exc:
-        logger.warning("send_message with entities failed (%s), falling back to plain", exc)
-        await bot.send_message(
-            chat_id=chat_id,
-            text=final_text,
-            reply_to_message_id=reply_to,
-            message_thread_id=thread_id,
-        )
+    #
+    # _send_body_chunks splits the markdown body on paragraph / sentence
+    # boundaries when it would otherwise overflow Telegram's 4096 UTF-16
+    # cap, then renders each chunk to entities independently. Header is
+    # attached to chunk #1 only.
+    await _send_body_chunks(body)
 
     if cache_repo and cache_eligible:
         try:

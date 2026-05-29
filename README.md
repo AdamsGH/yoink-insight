@@ -60,7 +60,25 @@ All three features are independent: a user can have `insight:tldr` without `insi
    Cache in insight_summary_cache (content_key=url, command="tldr")
 ```
 
-Responses stream progressively via Telegram's `sendMessageDraft` extension (same as `/summary`). The LLM model is per-user configurable from an admin-curated allowed list.
+Responses stream progressively via Telegram's `sendMessageDraft` extension (same as `/summary`). The LLM model is per-user configurable from an admin-curated allowed list. Responses longer than Telegram's 4096 UTF-16 cap are split on paragraph / sentence boundaries (`commands/tldr._split_markdown_for_telegram`) so the user always sees the full body even when a long-form alias overflows.
+
+### Built-in alias prompts
+
+`/tldr <url> <alias>` or a domain-binding row in `insight_tldr_aliases` swaps the default summariser instruction for a built-in persona. The resolved alias prompt is passed as `alias_instruction` to `_build_prompt`, which renders it as a system-style instruction (not a 'question'). The persona text is repeated front-and-back of the prompt with an anchor reminder of structural rules right before generation, so haiku-class models stay in character on long transcripts.
+
+| Alias | Shape | Notes |
+|---|---|---|
+| `max` | Thorough breakdown with headings and lists | Full coverage, technical detail preserved |
+| `nobullshit` / `noshit` | Bold verdict line + pointed commentary | Calls out hype, names solid craft in the same voice |
+| `tale` | 2-4 short paragraphs of third-person retelling | No lists, no headings, no wrap-up |
+
+All aliases enforce Markdown formatting: `**bold**` for names/numbers/verdicts, `` `code` `` for technical identifiers (versions, units, paths, error tokens), `> blockquote` when lifting a phrase from the source, blank lines between paragraphs. The detailed format rules sit in `_ALIAS_ANCHOR` at the very end of the prompt where they have the most weight on Haiku-class models.
+
+Deliberately NOT sent to the model: the source URL, domain, or 'YouTube video' framing. `_build_prompt` keeps `source_desc` in the signature but ignores it, so the model sees only the content body. This avoids generic 'this video explains' framing and trips fewer media-related policy refusals.
+
+### Markdown-provider chrome stripping
+
+The markdown providers (curl.md, jina) wrap the article body in decoration: a YAML front-matter block with `url:` / `site:` / `publish_date:` fields, a hero image right under the `# heading`, an author-avatar link, a `By [Name](/author/...)` byline, a `Published <timestamp>` line, an author bio paragraph, and a `Powered by [curl.md](...)` footer. `services.fetch._strip_provider_chrome` removes each of these with a bounded regex; byline and `Published` strips are unbounded so embedded 'related article' cards are cleaned too. If after stripping the result is mostly separators (`<100` significant chars), the result is discarded and the next strategy is tried.
 
 ## Web dashboard
 

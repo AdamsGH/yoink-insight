@@ -343,10 +343,78 @@ async def _fetch_via_provider(url: str, name: str, provider_url: str, extra_head
         target = provider_url.format(url=url)
         r = await client.get(target, headers={**extra_headers, "User-Agent": _USER_AGENT}, timeout=20.0)
         if r.status_code == 200 and len(r.text) > 100:
-            return r.text
+            stripped = _strip_provider_chrome(r.text)
+            # After chrome removal a 404 / empty-article page from the
+            # provider often collapses to a few '---' separators and
+            # whitespace. Anything below this threshold has no useful
+            # body, so we treat it as a miss and let the caller try the
+            # next strategy instead of feeding the LLM dashes.
+            if len(re.sub(r"[\s\-]+", "", stripped)) >= 100:
+                return stripped
+            logger.debug("%s returned only chrome/separators (len=%d after strip), skipping", name, len(stripped))
     except Exception as exc:
         logger.debug("%s failed: %s", name, exc)
     return None
+
+
+# Patterns the curl.md / jina markdown providers emit around the actual
+# article body. We strip them so the LLM sees only the content the user
+# cares about, not the source URL, domain, author avatar, or 'Powered by'
+# footer. We intentionally do NOT touch inline images further down the
+# body: those carry alt text the model can use; only the hero image
+# directly after the H1 and the author avatar link are decoration.
+_FRONT_MATTER_RE = re.compile(r"\A---\n.*?\n---\n+", re.DOTALL)
+_PROVIDER_FOOTER_RE = re.compile(
+    r"(?:\A|\n+)---\n+Powered by \[(?:curl\.md|Jina[^\]]*)\]\([^)]+\)\s*\Z",
+    re.IGNORECASE,
+)
+# Author avatar link: [![Name](image-url)](/author/slug/) or similar.
+_AUTHOR_AVATAR_RE = re.compile(r"\[!\[[^\]]*\]\([^)]+\)\]\(/[^)]*author[^)]*\)\s*")
+# Plain 'By [Name](/author/...)' byline emitted by curl.md when the source
+# page links the author. Matches at start of line; one byline per article.
+_BYLINE_RE = re.compile(r"^By\s+\[[^\]]+\]\([^)]*author[^)]*\)\s*\n+", re.MULTILINE)
+# 'Published ...' timestamp line that follows the byline on most CMS
+# templates. Tolerant about formatting (date/time/timezone shapes vary).
+_PUBLISHED_RE = re.compile(r"^Published[^\n]{0,80}\n+", re.MULTILINE)
+# Author bio paragraph that XDA-style sites embed between the byline
+# block and the article body. Heuristic: a paragraph that opens with one
+# of the known bio starters and ends at the next blank line. Tightened
+# enough to never bite into article prose.
+_AUTHOR_BIO_RE = re.compile(
+    r"^(?:Beginning|Born|Currently|Originally|Based|Working|Writing|Having|With over)\b[^\n]*(?:\n[^\n]+)*\n\n",
+    re.MULTILINE,
+)
+# Hero image: an ![alt](url) that appears immediately after the first H1
+# heading. Anchored to '# heading\n...![...](...)' to avoid stripping
+# inline images in the body.
+_HERO_IMAGE_RE = re.compile(
+    r"(\A|\n)(#\s+[^\n]+\n+)!\[[^\]]*\]\([^)]+\)\s*\n+",
+)
+
+
+def _strip_provider_chrome(text: str) -> str:
+    """Remove curl.md / jina decoration that leaks the source URL and
+    surrounding chrome but does not contribute to the article content.
+
+    Strips, in order: YAML front-matter at the top (url/site/publish_date),
+    the hero image right under the H1, the author avatar link, the
+    'By [Name](/author/...)' byline, the 'Published ...' timestamp, the
+    author bio paragraph, and the 'Powered by ...' footer. Each substitution
+    is bounded (count=1 where the pattern is one-shot) so a future change in
+    provider output degrades to a no-op rather than a corrupted body.
+    """
+    out = _FRONT_MATTER_RE.sub("", text, count=1)
+    out = _HERO_IMAGE_RE.sub(r"\1\2", out, count=1)
+    out = _AUTHOR_AVATAR_RE.sub("", out, count=1)
+    # Byline / publish-date / bio may appear more than once: many CMSs
+    # (XDA in particular) embed 'related article' cards inside the body,
+    # each with its own 'By [Name](/author/...)' line. Strip every
+    # occurrence so the model sees only the article prose.
+    out = _BYLINE_RE.sub("", out)
+    out = _PUBLISHED_RE.sub("", out)
+    out = _AUTHOR_BIO_RE.sub("", out, count=1)
+    out = _PROVIDER_FOOTER_RE.sub("", out)
+    return out.strip() + "\n"
 
 
 # ---------------------------------------------------------------------------
