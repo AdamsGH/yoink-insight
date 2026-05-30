@@ -329,6 +329,20 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _report_error(code)
         return
 
+    # One-line pipeline trace per /tldr invocation. Captures the inputs that
+    # determine the LLM output (provider/model/transcript size) so a 'why did
+    # the bot start talking about sore throats' bug can be diagnosed from logs
+    # alone. Logged at INFO so it survives default-level filtering.
+    if byok_route is not None:
+        llm_desc = f"byok={byok_route.provider}:{byok_route.model}"
+    else:
+        llm_desc = f"gateway:{user_model or config.tldr_llm_model}"
+    logger.info(
+        "tldr user=%s url=%s via=%s %s content_chars=%d video_seconds=%s alias=%s question=%s",
+        user_id, url, prepared.via, llm_desc, len(prepared.content),
+        prepared.video_seconds, alias_key, bool(question),
+    )
+
     accumulated = ""
     last_sent_len = 0
 
