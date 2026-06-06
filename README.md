@@ -199,6 +199,19 @@ All variables come from `.env` via `InsightConfig(BaseSettings)`.
 | `tldr_llm_model` | no | `cpa/anthropic/claude-haiku-4-5` | Default LLM model string (overridden by admin config and per-user choice) |
 | `tldr_max_content_chars` | no | `40000` | Max characters of extracted web content sent to LLM |
 | `tldr_rate_limit_per_day` | no | `20` | Per-user daily /tldr cap (fresh API hits only; 0 disables) |
+| `proxy_url` (env) | no | - | Optional socks5/http proxy for HTML and markdown-provider fallbacks (`github.com`, `raw.githubusercontent.com`, `r.jina.ai`) when the host can't reach them directly. The GitHub API path (`api.github.com`) does not use it. |
+
+### GitHub token (per-user, optional)
+
+The `/tldr` GitHub path uses an optional per-user OAuth token to read repo metadata, READMEs, issues, and PRs without hitting the 60/hour unauthenticated rate limit. Two ways to set it:
+
+1. **Web miniapp -> AI Settings -> TLDR card -> "Sign in with GitHub"** (recommended).
+   Runs an OAuth device-flow against the VS Code Copilot client_id (`Iv1.b507a08c87ecfe98`, scope `read:user`); the user sees a code, opens `github.com/login/device`, the token lands in `insight_user_settings.github_token` automatically.
+2. **Manual paste**: same card has a free-form input that takes any PAT or fine-grained token with read access to the repos you care about.
+
+The device-flow surface is gated on `tldr_gateway_access` (same rule as the manual input): BYOK-only users don't see it because their requests bypass the gateway entirely and the token wouldn't be used.
+
+The fetcher (`services.fetch._github_fetch`) uses a shared `httpx.AsyncClient` with `AsyncHTTPTransport(retries=2)` so transient connection resets self-heal instead of dead-ending as `ConnectError('')`. When the API call fails entirely, the HTML / markdown fallback (`github.com`, `raw.githubusercontent.com`, `r.jina.ai`) routes through `proxy_url` if set.
 
 ## API endpoints
 
@@ -219,9 +232,19 @@ Mounted at `/api/v1/insight/`. Auth: JWT Bearer token.
 | Method | Path | Description |
 |---|---|---|
 | GET | /settings/me | Own settings: lang, access flags, tldr_model, tldr_allowed_models, prompts, aliases |
-| PATCH | /settings/me | Update lang, tldr_model, use_search, and per-command prompt overrides |
+| PATCH | /settings/me | Update lang, tldr_model, use_search, github_token, and per-command prompt overrides |
 
-`PATCH /settings/me` body: `{ "lang": "ru", "tldr_model": "cpa/anthropic/claude-haiku-4-5" }`. Non-owner users can only set a model from the admin-configured allowed list.
+`PATCH /settings/me` body: `{ "lang": "ru", "tldr_model": "cpa/anthropic/claude-haiku-4-5" }`. Non-owner users can only set a model from the admin-configured allowed list. `github_token` accepts an empty string to clear.
+
+### GitHub OAuth device-flow login (per-user)
+
+| Method | Path | Description |
+|---|---|---|
+| POST | /github/login | Start device flow, returns `{user_code, verification_uri, expires_at, interval, status}` |
+| GET | /github/login/status | Poll `{status, user_code?, verification_uri?, error?, username?}`; `status` is `none\|pending\|success\|expired\|error` |
+| DELETE | /github/token | Clear stored token and cancel any in-flight flow |
+
+State is in-process (one `DeviceFlowState` per `user_id`); an API restart cancels any flow in progress and the user re-runs the login. On success the token is written to `insight_user_settings.github_token` for the calling user. Gated on `tldr_gateway_access` (matches the manual `github_token` field rule).
 
 ### TLDR aliases (user)
 
