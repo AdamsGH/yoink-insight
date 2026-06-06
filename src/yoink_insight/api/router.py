@@ -478,10 +478,16 @@ async def get_my_insight_settings(
     search_src = await resolver.grant_source(current_user.id, "insight", "search", user=current_user)
     has_tldr = tldr_src is not None
     has_search = search_src is not None
-    # Gateway-side controls (allowed-model picker, GitHub token, web-search
-    # routing) only make sense when the grant came from the gateway path.
-    # BYOK-only users (tldr_src == GrantSource.provider) route through their
-    # own LLM and pick their model in the BYOK card.
+    # Gateway-side controls (allowed-model picker, web-search routing) only
+    # make sense when the grant came from the gateway path. BYOK-only users
+    # (tldr_src == GrantSource.provider) route through their own LLM and
+    # pick their model in the BYOK card.
+    #
+    # github_token is the exception: GitHub content fetching happens INSIDE
+    # yoink (services.fetch._github_fetch) before the LLM call, regardless
+    # of which provider answers afterwards. BYOK users hit the same 60/h
+    # unauthenticated rate limit on api.github.com without a token, so
+    # both surfaces expose it - gated only on has_tldr_access.
     tldr_gw = tldr_src is not None and tldr_src != GrantSource.provider
     search_gw = search_src is not None and search_src != GrantSource.provider
     config = InsightConfig()
@@ -501,7 +507,7 @@ async def get_my_insight_settings(
         has_search_gateway_access=search_gw,
         tldr_model=tldr_model if tldr_gw else None,
         tldr_allowed_models=allowed if tldr_gw else [],
-        github_token_set=bool(github_token) if tldr_gw else False,
+        github_token_set=bool(github_token) if has_tldr else False,
         use_search=use_search if search_gw else False,
         prompts=user_prompts,
         prompt_defaults=_get_builtin_prompt_defaults(),
@@ -529,13 +535,15 @@ async def update_my_insight_settings(
 
     config = InsightConfig()
 
-    # Gateway-side fields (tldr_model, github_token, use_search) require a
-    # gateway-route grant. BYOK-only users route through their own LLM and
-    # have no business writing these.
+    # Gateway-side fields (tldr_model, use_search) require a gateway-route
+    # grant. BYOK-only users route through their own LLM and have no
+    # business writing these. github_token is NOT in this group - GitHub
+    # fetch runs inside yoink before the LLM call on both routes, so any
+    # has_tldr_access user can write it.
     if body.tldr_model is not None and not tldr_gw:
         raise HTTPException(status_code=403, detail="Model selection is only available on the gateway route.")
-    if body.github_token is not None and not tldr_gw:
-        raise HTTPException(status_code=403, detail="GitHub token is only available on the gateway route.")
+    if body.github_token is not None and not has_tldr:
+        raise HTTPException(status_code=403, detail="GitHub token requires TLDR access.")
 
     # Validate tldr_model against allowed list (owner bypasses)
     tldr_model = body.tldr_model
@@ -607,7 +615,7 @@ async def update_my_insight_settings(
         has_search_gateway_access=search_gw,
         tldr_model=settings_row.tldr_model if tldr_gw else None,
         tldr_allowed_models=allowed if tldr_gw else [],
-        github_token_set=bool(settings_row.github_token) if tldr_gw else False,
+        github_token_set=bool(settings_row.github_token) if has_tldr else False,
         use_search=settings_row.use_search if search_gw else False,
         prompts=user_prompts,
         prompt_defaults=_get_builtin_prompt_defaults(),
@@ -1320,19 +1328,14 @@ async def start_github_login(
     The token is stored automatically once the user completes verification;
     poll /insight/github/login/status to track progress.
     """
-    # Gating: only users with a TLDR gateway grant get a meaningful boost
-    # from a GitHub token (HTML/raw fallback works without). The current
-    # settings UI already mirrors this rule for the manual github_token
-    # field, so keep the device-flow surface aligned with it.
-    resolver = _resolver_for(request)
-    tldr_src = await resolver.grant_source(
-        current_user.id, "insight", "tldr", user=current_user
-    )
-    tldr_gw = tldr_src is not None and tldr_src != GrantSource.provider
-    if not tldr_gw and not _is_owner(current_user):
+    # Gating: any has_tldr_access user benefits, gateway or BYOK alike.
+    # GitHub fetch runs in yoink before the LLM call on both routes, so
+    # the 60/h unauthenticated rate limit on api.github.com bites both
+    # paths equally.
+    if not await _has_feature_access(request, current_user, "tldr"):
         raise HTTPException(
             status_code=403,
-            detail="GitHub token login is only available on the gateway route.",
+            detail="GitHub token login requires TLDR access.",
         )
 
     from yoink_insight.services import github_device

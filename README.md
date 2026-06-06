@@ -209,7 +209,7 @@ The `/tldr` GitHub path uses an optional per-user OAuth token to read repo metad
    Runs an OAuth device-flow against the VS Code Copilot client_id (`Iv1.b507a08c87ecfe98`, scope `read:user`); the user sees a code, opens `github.com/login/device`, the token lands in `insight_user_settings.github_token` automatically.
 2. **Manual paste**: same card has a free-form input that takes any PAT or fine-grained token with read access to the repos you care about.
 
-The device-flow surface is gated on `tldr_gateway_access` (same rule as the manual input): BYOK-only users don't see it because their requests bypass the gateway entirely and the token wouldn't be used.
+The token (manual or device-flow) is available to any user with `has_tldr_access` - gateway-route AND BYOK-route alike. GitHub content fetch happens inside yoink (`services.fetch._github_fetch`) BEFORE the LLM call, regardless of which provider answers afterwards; the 60/hour unauthenticated rate limit on `api.github.com` bites both paths equally.
 
 The fetcher (`services.fetch._github_fetch`) uses a shared `httpx.AsyncClient` with `AsyncHTTPTransport(retries=2)` so transient connection resets self-heal instead of dead-ending as `ConnectError('')`. When the API call fails entirely, the HTML / markdown fallback (`github.com`, `raw.githubusercontent.com`, `r.jina.ai`) routes through `proxy_url` if set.
 
@@ -244,7 +244,7 @@ Mounted at `/api/v1/insight/`. Auth: JWT Bearer token.
 | GET | /github/login/status | Poll `{status, user_code?, verification_uri?, error?, username?}`; `status` is `none\|pending\|success\|expired\|error` |
 | DELETE | /github/token | Clear stored token and cancel any in-flight flow |
 
-State is in-process (one `DeviceFlowState` per `user_id`); an API restart cancels any flow in progress and the user re-runs the login. On success the token is written to `insight_user_settings.github_token` for the calling user. Gated on `tldr_gateway_access` (matches the manual `github_token` field rule).
+State is in-process (one `DeviceFlowState` per `user_id`); an API restart cancels any flow in progress and the user re-runs the login. On success the token is written to `insight_user_settings.github_token` for the calling user. Gated on `has_tldr_access` (gateway OR BYOK), matching the rule on the manual `github_token` field.
 
 ### TLDR aliases (user)
 

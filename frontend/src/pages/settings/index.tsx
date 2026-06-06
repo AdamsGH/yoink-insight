@@ -496,6 +496,10 @@ export default function InsightSettingsPage() {
       const body: InsightSettingsPatch = { lang: lang ?? data?.lang }
       if (data?.has_tldr_gateway_access) {
         body.tldr_model = tldrModel ?? data?.tldr_model ?? null
+      }
+      // github_token writable for any has_tldr_access (gateway or BYOK):
+      // GitHub fetch runs inside yoink before the LLM call on both routes.
+      if (data?.has_tldr_access) {
         if (githubToken === '__clear__') {
           body.github_token = ''
         } else if (githubToken !== '') {
@@ -602,7 +606,7 @@ export default function InsightSettingsPage() {
 
   const langDirty = data !== null && lang !== null && lang !== data.lang
   const tldrDirty = data !== null && data.has_tldr_gateway_access && tldrModel !== null && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
-  const githubDirty = data !== null && data.has_tldr_gateway_access && githubToken !== ''
+  const githubDirty = data !== null && data.has_tldr_access && githubToken !== ''
   const searchDirty = data !== null && data.has_search_gateway_access && useSearch !== null && useSearch !== data.use_search
   const promptsDirty = Object.values(promptEdits).some(v => v !== null)
   const dirty = langDirty || tldrDirty || githubDirty || searchDirty || promptsDirty
@@ -754,54 +758,65 @@ export default function InsightSettingsPage() {
                 </div>
               )}
 
-              {data?.has_tldr_gateway_access && (
-                <div className="py-2 space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm leading-snug">{t('insight.github_token_label', { defaultValue: 'GitHub token' })}</p>
-                      {data.github_token_set && githubToken === '' && (
-                        <span className="text-xs text-green-500 font-medium">&#x2713;</span>
-                      )}
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs"
-                      onClick={() => setGithubLoginOpen(true)}
-                    >
-                      <KeyRound className="mr-1.5 h-3.5 w-3.5" />
-                      {data.github_token_set
-                        ? t('insight.github_login_relogin', { defaultValue: 'Re-link' })
-                        : t('insight.github_login_button', { defaultValue: 'Sign in with GitHub' })}
-                    </Button>
-                  </div>
-                  <div className="relative">
-                    <Input
-                      type="password"
-                      placeholder={data.github_token_set && githubToken === ''
-                        ? t('insight.github_token_placeholder_set', { defaultValue: 'New token to replace...' })
-                        : 'ghp_...'}
-                      value={githubToken === '__clear__' ? '' : githubToken}
-                      onChange={(e) => setGithubToken(e.target.value)}
-                      className="h-8 font-mono text-xs pr-9"
-                    />
-                    {data.github_token_set && githubToken === '' && (
-                      <button
-                        type="button"
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
-                        onClick={() => setGithubToken('__clear__')}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                  {githubToken === '__clear__' && (
-                    <p className="text-xs text-destructive">{t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}</p>
-                  )}
-                  <p className="text-xs text-muted-foreground whitespace-nowrap">For private repos &amp; rate limits</p>
-                </div>
+            </div>
+          </CardContent>
+        </Card>
+        )}
+
+        {/* GitHub token: its own card, shown for ANY has_tldr_access user
+            (gateway or BYOK alike). GitHub fetch runs inside yoink on both
+            routes before the LLM call, so the 60/h unauthenticated rate
+            limit on api.github.com bites equally - the token helps both. */}
+        {data?.has_tldr_access && (
+        <Card>
+          <CardHeader className="px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <KeyRound className="h-4 w-4 shrink-0 text-primary" />
+                {t('insight.github_token_label', { defaultValue: 'GitHub token' })}
+                {data.github_token_set && githubToken === '' && (
+                  <span className="text-xs text-green-500 font-medium">&#x2713;</span>
+                )}
+              </CardTitle>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => setGithubLoginOpen(true)}
+              >
+                {data.github_token_set
+                  ? t('insight.github_login_relogin', { defaultValue: 'Re-link' })
+                  : t('insight.github_login_button', { defaultValue: 'Sign in with GitHub' })}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="px-4 pb-3">
+            <div className="space-y-1.5">
+              <div className="relative">
+                <Input
+                  type="password"
+                  placeholder={data.github_token_set && githubToken === ''
+                    ? t('insight.github_token_placeholder_set', { defaultValue: 'New token to replace...' })
+                    : 'ghp_...'}
+                  value={githubToken === '__clear__' ? '' : githubToken}
+                  onChange={(e) => setGithubToken(e.target.value)}
+                  className="h-8 font-mono text-xs pr-9"
+                />
+                {data.github_token_set && githubToken === '' && (
+                  <button
+                    type="button"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
+                    onClick={() => setGithubToken('__clear__')}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {githubToken === '__clear__' && (
+                <p className="text-xs text-destructive">{t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}</p>
               )}
+              <p className="text-xs text-muted-foreground">For private repos &amp; rate limits (api.github.com fetch, both gateway and BYOK).</p>
             </div>
           </CardContent>
         </Card>
