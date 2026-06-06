@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -25,6 +26,39 @@ _USER_AGENT = "Mozilla/5.0 (compatible; yoink-insight/1.0)"
 _TIMEOUT = 30.0
 
 _GITHUB_HOSTS = {"github.com", "api.github.com", "raw.githubusercontent.com"}
+
+# Shared GitHub client. Reusing one client lets httpx keep the TCP/TLS pool
+# warm across calls and apply transport-level retries; a fresh AsyncClient
+# per call surfaces every transient pool reset as ConnectError(''). The
+# transport retries 2 transient connection failures before bubbling up.
+_github_client: httpx.AsyncClient | None = None
+_github_client_lock = asyncio.Lock()
+
+# Proxy for plain-HTML / markdown-provider fetches when the host can't reach
+# raw.githubusercontent.com or r.jina.ai directly. yt-dlp downloader already
+# uses this socks5 env on yoink hosts; reuse it here so /tldr fallback paths
+# don't dead-end with ConnectError on github.com / 451 on Jina.
+_FALLBACK_PROXY = os.environ.get("proxy_url") or os.environ.get("PROXY_URL")
+
+
+async def _get_github_client() -> httpx.AsyncClient:
+    global _github_client
+    if _github_client is not None:
+        return _github_client
+    async with _github_client_lock:
+        if _github_client is None:
+            transport = httpx.AsyncHTTPTransport(retries=2)
+            _github_client = httpx.AsyncClient(
+                timeout=20.0,
+                transport=transport,
+                follow_redirects=True,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": _USER_AGENT,
+                },
+            )
+    return _github_client
 _MARKDOWN_PROVIDERS = [
     ("jina",    "https://r.jina.ai/{url}",   {"Accept": "text/markdown", "X-No-Cache": "true", "X-Return-Format": "markdown"}),
     ("curl.md", "https://curl.md/{url}",      {"Accept": "text/markdown"}),
@@ -107,159 +141,160 @@ def _to_toon(data: object) -> str:
 
 
 async def _github_fetch(route: dict, token: str | None) -> str:
-    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    # Auth header is per-call (the shared client has only the static headers).
+    auth_headers: dict[str, str] = {}
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        auth_headers["Authorization"] = f"Bearer {token}"
 
     base = "https://api.github.com"
     op = route["op"]
+    client = await _get_github_client()
 
-    async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
-        if op == "raw_file":
-            raw_url = f"https://raw.githubusercontent.com/{route['owner']}/{route['repo']}/{route['ref']}/{route['path']}"
-            r = await client.get(raw_url)
-            r.raise_for_status()
+    if op == "raw_file":
+        raw_url = f"https://raw.githubusercontent.com/{route['owner']}/{route['repo']}/{route['ref']}/{route['path']}"
+        r = await client.get(raw_url, headers=auth_headers)
+        r.raise_for_status()
+        return r.text
+
+    if op == "api_passthrough":
+        r = await client.get(f"{base}/{route['path']}", headers=auth_headers)
+        r.raise_for_status()
+        return _to_toon(r.json())
+
+    if op == "file":
+        # Try raw first (no API rate limit hit)
+        raw_url = f"https://raw.githubusercontent.com/{route['owner']}/{route['repo']}/{route['ref']}/{route['path']}"
+        r = await client.get(raw_url, headers=auth_headers)
+        if r.status_code == 200:
             return r.text
+        # Fall back to contents API (returns base64)
+        import base64
+        api_url = f"{base}/repos/{route['owner']}/{route['repo']}/contents/{route['path']}?ref={route['ref']}"
+        r = await client.get(api_url, headers=auth_headers)
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict) and data.get("encoding") == "base64":
+            return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+        return _to_toon(data)
 
-        if op == "api_passthrough":
-            r = await client.get(f"{base}/{route['path']}")
-            r.raise_for_status()
-            return _to_toon(r.json())
+    if op == "tree":
+        api_url = f"{base}/repos/{route['owner']}/{route['repo']}/git/trees/{route['ref']}?recursive=1"
+        r = await client.get(api_url, headers=auth_headers)
+        r.raise_for_status()
+        tree = r.json().get("tree", [])
+        path_prefix = route.get("path", "")
+        lines = []
+        for item in tree:
+            p = item.get("path", "")
+            if path_prefix and not p.startswith(path_prefix):
+                continue
+            lines.append(f"{item.get('type','?'):4}  {p}")
+        return "\n".join(lines)
 
-        if op == "file":
-            # Try raw first (no API rate limit hit)
-            raw_url = f"https://raw.githubusercontent.com/{route['owner']}/{route['repo']}/{route['ref']}/{route['path']}"
-            r = await client.get(raw_url)
-            if r.status_code == 200:
-                return r.text
-            # Fall back to contents API (returns base64)
-            import base64
-            api_url = f"{base}/repos/{route['owner']}/{route['repo']}/contents/{route['path']}?ref={route['ref']}"
-            r = await client.get(api_url)
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, dict) and data.get("encoding") == "base64":
-                return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-            return _to_toon(data)
+    if op == "repo_info":
+        r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}", headers=auth_headers)
+        r.raise_for_status()
+        d = r.json()
+        lines = [
+            f"# {d.get('full_name','')}",
+            d.get("description") or "",
+            "",
+            f"Stars: {d.get('stargazers_count',0)}  Forks: {d.get('forks_count',0)}  Open issues: {d.get('open_issues_count',0)}",
+            f"Language: {d.get('language','?')}  License: {(d.get('license') or {}).get('spdx_id','?')}",
+            f"Default branch: {d.get('default_branch','main')}",
+            f"URL: {d.get('html_url','')}",
+        ]
+        # Fetch README
+        try:
+            rr = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/readme", headers=auth_headers)
+            if rr.status_code == 200:
+                import base64 as _b64
+                rd = rr.json()
+                readme = _b64.b64decode(rd["content"]).decode("utf-8", errors="replace")
+                lines += ["", "## README", readme[:4000]]
+        except Exception:
+            pass
+        return "\n".join(lines)
 
-        if op == "tree":
-            api_url = f"{base}/repos/{route['owner']}/{route['repo']}/git/trees/{route['ref']}?recursive=1"
-            r = await client.get(api_url)
-            r.raise_for_status()
-            tree = r.json().get("tree", [])
-            path_prefix = route.get("path", "")
-            lines = []
-            for item in tree:
-                p = item.get("path", "")
-                if path_prefix and not p.startswith(path_prefix):
-                    continue
-                lines.append(f"{item.get('type','?'):4}  {p}")
-            return "\n".join(lines)
+    if op == "issue":
+        r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/issues/{route['number']}", headers=auth_headers)
+        r.raise_for_status()
+        d = r.json()
+        lines = [
+            f"# Issue #{d['number']}: {d['title']}",
+            f"State: {d['state']}  Author: {d['user']['login']}",
+            "",
+            d.get("body") or "(no body)",
+        ]
+        cr = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/issues/{route['number']}/comments?per_page=20", headers=auth_headers)
+        if cr.status_code == 200:
+            for c in cr.json():
+                lines += ["", f"--- @{c['user']['login']} ---", c.get("body") or ""]
+        return "\n".join(lines)
 
-        if op == "repo_info":
-            r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}")
-            r.raise_for_status()
-            d = r.json()
-            lines = [
-                f"# {d.get('full_name','')}",
-                d.get("description") or "",
-                "",
-                f"Stars: {d.get('stargazers_count',0)}  Forks: {d.get('forks_count',0)}  Open issues: {d.get('open_issues_count',0)}",
-                f"Language: {d.get('language','?')}  License: {(d.get('license') or {}).get('spdx_id','?')}",
-                f"Default branch: {d.get('default_branch','main')}",
-                f"URL: {d.get('html_url','')}",
-            ]
-            # Fetch README
-            try:
-                rr = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/readme")
-                if rr.status_code == 200:
-                    import base64 as _b64
-                    rd = rr.json()
-                    readme = _b64.b64decode(rd["content"]).decode("utf-8", errors="replace")
-                    lines += ["", "## README", readme[:4000]]
-            except Exception:
-                pass
-            return "\n".join(lines)
+    if op == "issues":
+        r = await client.get(
+            f"{base}/repos/{route['owner']}/{route['repo']}/issues",
+            params={"state": route.get("state", "open"), "per_page": 30},
+            headers=auth_headers,
+        )
+        r.raise_for_status()
+        items = [
+            {"number": i["number"], "state": i["state"], "title": i["title"], "author": i["user"]["login"]}
+            for i in r.json() if "pull_request" not in i
+        ]
+        return f"## Issues ({route.get('state', 'open')})\n" + _to_toon(items)
 
-        if op == "issue":
-            r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/issues/{route['number']}")
-            r.raise_for_status()
-            d = r.json()
-            lines = [
-                f"# Issue #{d['number']}: {d['title']}",
-                f"State: {d['state']}  Author: {d['user']['login']}",
-                "",
-                d.get("body") or "(no body)",
-            ]
-            # Comments
-            cr = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/issues/{route['number']}/comments?per_page=20")
-            if cr.status_code == 200:
-                for c in cr.json():
-                    lines += ["", f"--- @{c['user']['login']} ---", c.get("body") or ""]
-            return "\n".join(lines)
+    if op == "pr":
+        r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/pulls/{route['number']}", headers=auth_headers)
+        r.raise_for_status()
+        d = r.json()
+        lines = [
+            f"# PR #{d['number']}: {d['title']}",
+            f"State: {d['state']}  Author: {d['user']['login']}",
+            f"Base: {d['base']['ref']} <- Head: {d['head']['ref']}",
+            "",
+            d.get("body") or "(no body)",
+        ]
+        cr = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/pulls/{route['number']}/comments?per_page=20", headers=auth_headers)
+        if cr.status_code == 200:
+            for c in cr.json():
+                lines += ["", f"--- @{c['user']['login']} on `{c.get('path','')}` ---", c.get("body") or ""]
+        return "\n".join(lines)
 
-        if op == "issues":
-            r = await client.get(
-                f"{base}/repos/{route['owner']}/{route['repo']}/issues",
-                params={"state": route.get("state", "open"), "per_page": 30},
-            )
-            r.raise_for_status()
-            items = [
-                {"number": i["number"], "state": i["state"], "title": i["title"], "author": i["user"]["login"]}
-                for i in r.json() if "pull_request" not in i
-            ]
-            return f"## Issues ({route.get('state', 'open')})\n" + _to_toon(items)
+    if op == "prs":
+        r = await client.get(
+            f"{base}/repos/{route['owner']}/{route['repo']}/pulls",
+            params={"state": route.get("state", "open"), "per_page": 30},
+            headers=auth_headers,
+        )
+        r.raise_for_status()
+        items = [
+            {"number": pr["number"], "state": pr["state"], "title": pr["title"], "author": pr["user"]["login"]}
+            for pr in r.json()
+        ]
+        return f"## Pull requests ({route.get('state', 'open')})\n" + _to_toon(items)
 
-        if op == "pr":
-            r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/pulls/{route['number']}")
-            r.raise_for_status()
-            d = r.json()
-            lines = [
-                f"# PR #{d['number']}: {d['title']}",
-                f"State: {d['state']}  Author: {d['user']['login']}",
-                f"Base: {d['base']['ref']} <- Head: {d['head']['ref']}",
-                "",
-                d.get("body") or "(no body)",
-            ]
-            # Review comments
-            cr = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/pulls/{route['number']}/comments?per_page=20")
-            if cr.status_code == 200:
-                for c in cr.json():
-                    lines += ["", f"--- @{c['user']['login']} on `{c.get('path','')}` ---", c.get("body") or ""]
-            return "\n".join(lines)
+    if op == "commits":
+        params: dict = {"per_page": 30}
+        if route.get("branch"):
+            params["sha"] = route["branch"]
+        r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/commits", params=params, headers=auth_headers)
+        r.raise_for_status()
+        items = [
+            {"sha": c["sha"][:8], "message": c["commit"]["message"].splitlines()[0][:80], "author": c["commit"]["author"]["name"]}
+            for c in r.json()
+        ]
+        return "## Commits\n" + _to_toon(items)
 
-        if op == "prs":
-            r = await client.get(
-                f"{base}/repos/{route['owner']}/{route['repo']}/pulls",
-                params={"state": route.get("state", "open"), "per_page": 30},
-            )
-            r.raise_for_status()
-            items = [
-                {"number": pr["number"], "state": pr["state"], "title": pr["title"], "author": pr["user"]["login"]}
-                for pr in r.json()
-            ]
-            return f"## Pull requests ({route.get('state', 'open')})\n" + _to_toon(items)
-
-        if op == "commits":
-            params: dict = {"per_page": 30}
-            if route.get("branch"):
-                params["sha"] = route["branch"]
-            r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/commits", params=params)
-            r.raise_for_status()
-            items = [
-                {"sha": c["sha"][:8], "message": c["commit"]["message"].splitlines()[0][:80], "author": c["commit"]["author"]["name"]}
-                for c in r.json()
-            ]
-            return "## Commits\n" + _to_toon(items)
-
-        if op == "releases":
-            r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/releases?per_page=10")
-            r.raise_for_status()
-            items = [
-                {"tag": rel["tag_name"], "name": rel["name"], "published": rel.get("published_at", "")[:10], "body": (rel.get("body") or "")[:300]}
-                for rel in r.json()
-            ]
-            return "## Releases\n" + _to_toon(items)
+    if op == "releases":
+        r = await client.get(f"{base}/repos/{route['owner']}/{route['repo']}/releases?per_page=10", headers=auth_headers)
+        r.raise_for_status()
+        items = [
+            {"tag": rel["tag_name"], "name": rel["name"], "published": rel.get("published_at", "")[:10], "body": (rel.get("body") or "")[:300]}
+            for rel in r.json()
+        ]
+        return "## Releases\n" + _to_toon(items)
 
     return ""
 
@@ -451,13 +486,21 @@ async def fetch_web_content(url: str, max_chars: int, github_token: str | None =
                     return FetchResult(content=text, title=None, via=f"github-api:{route['op']}")
                 logger.warning("GitHub API returned empty content for %s op=%s, falling back", url, route.get("op"))
             except Exception as exc:
-                logger.warning("GitHub API fetch failed for %s: %s: %s", url, type(exc).__name__, exc)
+                # repr() exposes ConnectError(''), TimeoutException(''), etc.
+                # The bare str(exc) is empty for many httpx network errors.
+                logger.warning(
+                    "GitHub API fetch failed for %s op=%s: %r",
+                    url, route.get("op"), exc,
+                )
 
-    async with httpx.AsyncClient(
-        timeout=_TIMEOUT,
-        follow_redirects=True,
-        headers={"User-Agent": _USER_AGENT},
-    ) as client:
+    client_kwargs: dict = {
+        "timeout": _TIMEOUT,
+        "follow_redirects": True,
+        "headers": {"User-Agent": _USER_AGENT},
+    }
+    if _FALLBACK_PROXY:
+        client_kwargs["proxy"] = _FALLBACK_PROXY
+    async with httpx.AsyncClient(**client_kwargs) as client:
         # llms.txt (skip for GitHub - they don't have /llms.txt)
         if not is_github:
             matched_url = await _check_llms_txt(url, client)
@@ -473,7 +516,7 @@ async def fetch_web_content(url: str, max_chars: int, github_token: str | None =
             if r.status_code < 400:
                 html = r.text
         except httpx.RequestError as exc:
-            logger.warning("HTTP fetch failed for %s: %s", fetch_url, exc)
+            logger.warning("HTTP fetch failed for %s: %r", fetch_url, exc)
 
         if html and not is_github:
             # readability
