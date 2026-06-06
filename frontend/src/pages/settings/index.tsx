@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useGetIdentity } from '@refinedev/core'
-import { BrainCircuit, ChevronDown, FileText, Link, LockKeyhole, MessageCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
+import { BrainCircuit, ChevronDown, FileText, KeyRound, Link, LockKeyhole, MessageCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
 
 import { insightApi, type ByokConfig, type InsightSettings, type InsightSettingsPatch, type TldrAlias, type TldrAliasInput } from '@insight/api/insight'
 import ByokCard from './ByokCard'
+import GithubLoginDialog from './GithubLoginDialog'
 import { formatDate } from '@core/lib/utils'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle,
@@ -418,6 +419,7 @@ export default function InsightSettingsPage() {
   const [allModels, setAllModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [githubToken, setGithubToken] = useState<string>('')
+  const [githubLoginOpen, setGithubLoginOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -754,11 +756,25 @@ export default function InsightSettingsPage() {
 
               {data?.has_tldr_gateway_access && (
                 <div className="py-2 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm leading-snug">{t('insight.github_token_label', { defaultValue: 'GitHub token' })}</p>
-                    {data.github_token_set && githubToken === '' && (
-                      <span className="text-xs text-green-500 font-medium">&#x2713;</span>
-                    )}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm leading-snug">{t('insight.github_token_label', { defaultValue: 'GitHub token' })}</p>
+                      {data.github_token_set && githubToken === '' && (
+                        <span className="text-xs text-green-500 font-medium">&#x2713;</span>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setGithubLoginOpen(true)}
+                    >
+                      <KeyRound className="mr-1.5 h-3.5 w-3.5" />
+                      {data.github_token_set
+                        ? t('insight.github_login_relogin', { defaultValue: 'Re-link' })
+                        : t('insight.github_login_button', { defaultValue: 'Sign in with GitHub' })}
+                    </Button>
                   </div>
                   <div className="relative">
                     <Input
@@ -790,6 +806,19 @@ export default function InsightSettingsPage() {
           </CardContent>
         </Card>
         )}
+
+        <GithubLoginDialog
+          open={githubLoginOpen}
+          onClose={() => setGithubLoginOpen(false)}
+          onSuccess={() => {
+            // Re-pull /insight/settings/me so github_token_set flips to true
+            // without requiring a full page reload.
+            void insightApi.getSettings().then((res) => {
+              setData(res.data)
+              setGithubToken('')
+            }).catch(() => {})
+          }}
+        />
 
         {/* Save */}
         {dirty && (

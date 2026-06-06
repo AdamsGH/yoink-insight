@@ -109,6 +109,24 @@ export interface ByokAdminConfig {
   enabled: boolean
 }
 
+export interface GithubDeviceFlowStart {
+  user_code: string
+  verification_uri: string
+  expires_at: number
+  interval: number
+  status: string
+}
+
+export interface GithubDeviceFlowStatus {
+  status: 'none' | 'pending' | 'success' | 'expired' | 'error'
+  user_code?: string
+  verification_uri?: string
+  expires_at?: number
+  interval?: number
+  error?: string | null
+  username?: string | null
+}
+
 export const insightApi = {
   getSettings: () =>
     apiClient.get<InsightSettings>('/insight/settings/me'),
@@ -168,4 +186,14 @@ export const insightApi = {
 
   setByokAdmin: (body: ByokAdminConfig) =>
     apiClient.patch<ByokAdminConfig>('/insight/config/byok', body),
+
+  // GitHub OAuth device-flow login
+  startGithubLogin: () =>
+    apiClient.post<GithubDeviceFlowStart>('/insight/github/login'),
+
+  getGithubLoginStatus: () =>
+    apiClient.get<GithubDeviceFlowStatus>('/insight/github/login/status'),
+
+  deleteGithubToken: () =>
+    apiClient.delete('/insight/github/token'),
 }

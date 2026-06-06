@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1300,3 +1301,92 @@ async def set_byok_admin(
                 await _refresh_user_bot_commands(request, session, uid)
 
     return ByokAdminConfig(enabled=body.enabled)
+
+
+# ---------------------------------------------------------------------------
+# GitHub OAuth device-flow login (per-user)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/github/login", summary="Start GitHub device-flow login (writes to insight_user_settings.github_token on success)")
+async def start_github_login(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Begin a GitHub device-flow login for the current user.
+
+    Returns the user_code + verification URL so the miniapp can show them.
+    The token is stored automatically once the user completes verification;
+    poll /insight/github/login/status to track progress.
+    """
+    # Gating: only users with a TLDR gateway grant get a meaningful boost
+    # from a GitHub token (HTML/raw fallback works without). The current
+    # settings UI already mirrors this rule for the manual github_token
+    # field, so keep the device-flow surface aligned with it.
+    resolver = _resolver_for(request)
+    tldr_src = await resolver.grant_source(
+        current_user.id, "insight", "tldr", user=current_user
+    )
+    tldr_gw = tldr_src is not None and tldr_src != GrantSource.provider
+    if not tldr_gw and not _is_owner(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="GitHub token login is only available on the gateway route.",
+        )
+
+    from yoink_insight.services import github_device
+    sf = request.app.state.session_factory
+    try:
+        state = await github_device.start_device_flow(current_user.id, sf)
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"GitHub device-code request failed: {exc!r}",
+        )
+    return {
+        "user_code": state.user_code,
+        "verification_uri": state.verification_uri,
+        "expires_at": state.expires_at,
+        "interval": state.interval,
+        "status": state.status,
+    }
+
+
+@router.get("/github/login/status", summary="Poll GitHub device-flow status")
+async def get_github_login_status(
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return the current device-flow status for the calling user.
+
+    `status` is one of: pending, success, expired, error, none. On success,
+    the token has already been persisted to insight_user_settings.
+    """
+    from yoink_insight.services import github_device
+    state = await github_device.get_device_flow_status(current_user.id)
+    if state is None:
+        return {"status": "none"}
+    return {
+        "status": state.status,
+        "user_code": state.user_code,
+        "verification_uri": state.verification_uri,
+        "expires_at": state.expires_at,
+        "interval": state.interval,
+        "error": state.error,
+        "username": state.username,
+    }
+
+
+@router.delete("/github/token", status_code=204, summary="Clear stored GitHub OAuth token")
+async def delete_github_token(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Drop the stored GitHub token and any in-flight device-flow state."""
+    from yoink_insight.services import github_device
+    from yoink_insight.storage.repos import InsightUserSettingsRepo
+
+    sf = request.app.state.session_factory
+    await InsightUserSettingsRepo(sf).set_github_token(current_user.id, None)
+    await github_device.cancel_device_flow(current_user.id)
