@@ -6,6 +6,7 @@ import { BrainCircuit, ChevronDown, FileText, KeyRound, Link, LockKeyhole, Messa
 import { insightApi, type ByokConfig, type InsightSettings, type InsightSettingsPatch, type TldrAlias, type TldrAliasInput } from '@insight/api/insight'
 import ByokCard from './ByokCard'
 import GithubLoginDialog from './GithubLoginDialog'
+import { MarkdownBody } from '@app'
 import { formatDate } from '@core/lib/utils'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle,
@@ -169,15 +170,36 @@ function AliasDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
+      {/* Inline-style layout overrides shadcn's baked-in `grid p-6 gap-4
+          max-w-lg`. Outer padding sits on DialogContent itself (24px all
+          around) so EVERY child - header, body, footer - is automatically
+          inset; no per-section px-6 needed. Gap between sections comes
+          from `gap: 18px` not tailwind space-y, so footer can never
+          collapse against the body. */}
+      <DialogContent
+        className="!max-w-none"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: 'min(1000px, calc(100vw - 2rem))',
+          maxWidth: 'min(1000px, calc(100vw - 2rem))',
+          height: 'min(90dvh, 800px)',
+          maxHeight: '90dvh',
+          padding: '24px',
+          gap: '18px',
+        }}
+      >
+        <DialogHeader className="shrink-0 space-y-0">
           <DialogTitle>
             {initial
               ? t('insight.alias_edit_title', { defaultValue: 'Edit alias' })
               : t('insight.alias_add_title', { defaultValue: 'Add alias' })}
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <div
+          className="space-y-5"
+          style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}
+        >
           <div className="space-y-1.5">
             <Label>{t('insight.alias_field', { defaultValue: 'Aliases' })}</Label>
             <TagInput
@@ -199,7 +221,7 @@ function AliasDialog({
             <FieldLabel htmlFor="alias-prompt">{t('insight.alias_prompt_field', { defaultValue: 'Prompt instruction' })}</FieldLabel>
             <Textarea
               id="alias-prompt"
-              className="min-h-[80px] resize-none text-sm"
+              className="min-h-[80px] max-h-[40dvh] resize-y text-sm"
               placeholder={t('insight.alias_prompt_placeholder', { defaultValue: 'e.g. Focus on technical details and code examples.' })}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -213,12 +235,14 @@ function AliasDialog({
             </p>
           </div>
         </div>
-        <DialogActions>
-          <Button variant="outline" className="flex-1" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button className="flex-1" onClick={handleSubmit} disabled={!canSave}>
-            {saving ? t('common.loading') : t('common.save')}
-          </Button>
-        </DialogActions>
+        <div className="shrink-0">
+          <DialogActions>
+            <Button variant="outline" className="flex-1" onClick={onClose}>{t('common.cancel')}</Button>
+            <Button className="flex-1" onClick={handleSubmit} disabled={!canSave}>
+              {saving ? t('common.loading') : t('common.save')}
+            </Button>
+          </DialogActions>
+        </div>
       </DialogContent>
     </Dialog>
   )
@@ -288,8 +312,21 @@ function BuiltinBindDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
+      {/* Same layout as AliasDialog - see comment there. */}
+      <DialogContent
+        className="!max-w-none"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: 'min(1000px, calc(100vw - 2rem))',
+          maxWidth: 'min(1000px, calc(100vw - 2rem))',
+          height: 'min(90dvh, 800px)',
+          maxHeight: '90dvh',
+          padding: '24px',
+          gap: '18px',
+        }}
+      >
+        <DialogHeader className="shrink-0 space-y-0">
           <DialogTitle>
             <span>{t('insight.builtin_bind_title', { defaultValue: 'Bind domains to' })}</span>{' '}
             <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-sm text-secondary-foreground">
@@ -297,11 +334,22 @@ function BuiltinBindDialog({
             </span>
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
-          <pre className="max-h-60 overflow-y-auto rounded-md border bg-muted px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
-            <code>{fullPrompt && fullPrompt.trim().length > 0 ? fullPrompt : def.desc}</code>
-          </pre>
-          <div className="space-y-1.5">
+        <div
+          className="space-y-5"
+          style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}
+        >
+          {/* Prompt preview card. Generous internal padding (p-5) so the
+              markdown body has breathing room on a 1000px-wide dialog. */}
+          <div className="rounded-md border border-border bg-muted/40 p-5">
+            <MarkdownBody
+              text={fullPrompt && fullPrompt.trim().length > 0 ? fullPrompt : def.desc}
+              className="text-[13px]"
+            />
+          </div>
+          {/* Domain editor sits in its own breathing space below the prompt.
+              pt-2 + space-y-2 make the two halves of the dialog read as
+              distinct sections, not as one continuous wall. */}
+          <div className="pt-2 space-y-2">
             <Label>{t('insight.alias_domains_field', { defaultValue: 'Auto-apply on domains' })}</Label>
             <TagInput tags={domains} onChange={setDomains} placeholder={DOMAIN_HINT} autoFocus />
             <p className="text-xs text-muted-foreground">
@@ -309,18 +357,20 @@ function BuiltinBindDialog({
             </p>
           </div>
         </div>
-        <DialogActions>
-          {existingRow && onDelete ? (
-            <Button variant="outline" className="flex-1 text-destructive" onClick={handleDelete} disabled={saving}>
-              {t('common.delete')}
+        <div className="shrink-0">
+          <DialogActions>
+            {existingRow && onDelete ? (
+              <Button variant="outline" className="flex-1 text-destructive" onClick={handleDelete} disabled={saving}>
+                {t('common.delete')}
+              </Button>
+            ) : (
+              <Button variant="outline" className="flex-1" onClick={onClose} disabled={saving}>{t('common.cancel')}</Button>
+            )}
+            <Button className="flex-1" onClick={handleSubmit} disabled={domains.length === 0 || saving}>
+              {saving ? t('common.loading') : t('common.save')}
             </Button>
-          ) : (
-            <Button variant="outline" className="flex-1" onClick={onClose} disabled={saving}>{t('common.cancel')}</Button>
-          )}
-          <Button className="flex-1" onClick={handleSubmit} disabled={domains.length === 0 || saving}>
-            {saving ? t('common.loading') : t('common.save')}
-          </Button>
-        </DialogActions>
+          </DialogActions>
+        </div>
       </DialogContent>
     </Dialog>
   )
