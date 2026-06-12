@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -41,6 +42,14 @@ GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 
 _USER_AGENT = "yoink-insight-device-flow/1.0"
+_PROXY = os.environ.get("proxy_url") or os.environ.get("PROXY_URL") or None
+
+
+def _make_client(**kwargs) -> httpx.AsyncClient:
+    """AsyncClient routed through proxy_url when set."""
+    if _PROXY:
+        kwargs.setdefault("proxy", _PROXY)
+    return httpx.AsyncClient(**kwargs)
 
 
 @dataclass
@@ -67,7 +76,7 @@ _lock = asyncio.Lock()
 async def start_device_flow(user_id: int, session_factory) -> DeviceFlowState:
     """Begin a device-flow login for `user_id`, cancelling any prior flow."""
     async with _lock:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _make_client(timeout=15) as client:
             resp = await client.post(
                 GITHUB_DEVICE_CODE_URL,
                 headers={
@@ -117,7 +126,7 @@ async def _poll_until_done(state: DeviceFlowState, session_factory) -> None:
             return
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with _make_client(timeout=15) as client:
                 resp = await client.post(
                     GITHUB_ACCESS_TOKEN_URL,
                     headers={
@@ -163,7 +172,7 @@ async def _poll_until_done(state: DeviceFlowState, session_factory) -> None:
         # Look up the username so the UI can show 'Signed in as @x'.
         username: Optional[str] = None
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with _make_client(timeout=10) as client:
                 ur = await client.get(
                     GITHUB_USER_URL,
                     headers={
@@ -206,7 +215,7 @@ async def start_public_repo_flow(
     Stores resulting token in insight_user_settings.github_token_public_repo.
     """
     async with _lock:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _make_client(timeout=15) as client:
             resp = await client.post(
                 GITHUB_DEVICE_CODE_URL,
                 headers={
@@ -255,7 +264,7 @@ async def _poll_public_repo(
             return
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with _make_client(timeout=15) as client:
                 resp = await client.post(
                     GITHUB_ACCESS_TOKEN_URL,
                     headers={
@@ -300,7 +309,7 @@ async def _poll_public_repo(
 
         username: Optional[str] = None
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with _make_client(timeout=10) as client:
                 ur = await client.get(
                     GITHUB_USER_URL,
                     headers={

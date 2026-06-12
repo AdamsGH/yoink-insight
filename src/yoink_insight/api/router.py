@@ -1418,15 +1418,29 @@ async def start_public_repo_login(
     if not cfg.github_oauth_public_repo_client_id:
         raise HTTPException(status_code=501, detail="public_repo OAuth App not configured")
 
+    import asyncio as _asyncio
+    import logging as _logging
+    import httpx as _httpx
+
     sf = request.app.state.session_factory
-    try:
-        state = await github_device.start_public_repo_flow(
-            current_user.id, sf, cfg.github_oauth_public_repo_client_id
-        )
-    except Exception as exc:
-        import logging as _logging
-        _logging.getLogger(__name__).exception("upgrade-scope failed for user=%d", current_user.id)
-        raise HTTPException(status_code=502, detail=f"GitHub device-code request failed: {exc!r}")
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            state = await github_device.start_public_repo_flow(
+                current_user.id, sf, cfg.github_oauth_public_repo_client_id
+            )
+            break
+        except _httpx.ConnectError as exc:
+            last_exc = exc
+            _logging.getLogger(__name__).warning(
+                "upgrade-scope connect attempt %d failed: %s", attempt + 1, exc
+            )
+            await _asyncio.sleep(1.5 * (attempt + 1))
+        except Exception as exc:
+            _logging.getLogger(__name__).exception("upgrade-scope failed for user=%d", current_user.id)
+            raise HTTPException(status_code=502, detail=f"GitHub device-code request failed: {exc!r}")
+    else:
+        raise HTTPException(status_code=502, detail=f"GitHub unreachable after 3 attempts: {last_exc!r}")
     return {
         "user_code": state.user_code,
         "verification_uri": state.verification_uri,
