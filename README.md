@@ -246,6 +246,19 @@ Mounted at `/api/v1/insight/`. Auth: JWT Bearer token.
 
 State is in-process (one `DeviceFlowState` per `user_id`); an API restart cancels any flow in progress and the user re-runs the login. On success the token is written to `insight_user_settings.github_token` for the calling user. Gated on `has_tldr_access` (gateway OR BYOK), matching the rule on the manual `github_token` field.
 
+### GitHub write-access device-flow (`public_repo`)
+
+A separate device-flow for a second OAuth App that requests `public_repo` scope. Used by `yoink-inbox` to star/unstar repos from the web UI without touching the existing `read:user` token.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | /github/upgrade-scope | Start `public_repo` device flow; returns same shape as `/github/login`. Returns 501 when `github_oauth_public_repo_client_id` is not configured |
+| GET | /github/upgrade-scope/status | Poll flow state (`none\|pending\|success\|expired\|error`) |
+| DELETE | /github/write-token | Revoke `github_token_public_repo` and cancel any in-flight flow |
+| GET | /github/write-token/status | `{enabled: bool, configured: bool}` for the UI card |
+
+Token is stored in `insight_user_settings.github_token_public_repo`. The `configured` flag is false when both env vars are absent, which hides the settings card entirely.
+
 ### TLDR aliases (user)
 
 | Method | Path | Description |
@@ -297,6 +310,7 @@ Single Alembic chain. Insight-relevant migrations:
 | 0044 | `insight_user_settings.use_search` column (AI Search toggle) |
 | 0045 | `insight_user_byok` per-user Bring-Your-Own-Key configuration |
 | 0046 | `insight_usage_log.route` column (`gateway` default, `byok` for direct-provider calls) |
+| 0049 | `insight_user_settings.github_token_public_repo VARCHAR(256)` for inbox `gh_write` feature |
 
 ### Schema
 
