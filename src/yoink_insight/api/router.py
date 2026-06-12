@@ -1424,6 +1424,8 @@ async def start_public_repo_login(
             current_user.id, sf, cfg.github_oauth_public_repo_client_id
         )
     except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).exception("upgrade-scope failed for user=%d", current_user.id)
         raise HTTPException(status_code=502, detail=f"GitHub device-code request failed: {exc!r}")
     return {
         "user_code": state.user_code,
