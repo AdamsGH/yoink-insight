@@ -8,6 +8,7 @@ import {
   Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList,
 } from '@ui'
 import { KeyRound } from 'lucide-react'
+import { PageContainer } from '@app'
 import { toast } from '@core/components/ui/toast'
 
 export default function TldrConfigPage() {
@@ -139,7 +140,7 @@ export default function TldrConfigPage() {
   const allowedModels = allModels.filter((m) => allowed.includes(m.id))
 
   if (loading) {
-    return <div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div>
+    return <PageContainer><div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div></PageContainer>
   }
 
   const dirty = config !== null && (
@@ -150,7 +151,8 @@ export default function TldrConfigPage() {
   )
 
   return (
-    <div className="space-y-3">
+    <PageContainer>
+      <div className="space-y-3">
       {/* BYOK toggle */}
       {byokAdmin && (
         <Card>
@@ -327,6 +329,7 @@ export default function TldrConfigPage() {
           {saving ? t('common.saving') : t('common.save')}
         </Button>
       )}
-    </div>
+      </div>
+    </PageContainer>
   )
 }

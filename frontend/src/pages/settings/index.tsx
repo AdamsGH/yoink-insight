@@ -7,7 +7,7 @@ import { insightApi, type ByokConfig, type InsightSettings, type InsightSettings
 import ByokCard from './ByokCard'
 import GithubLoginDialog from './GithubLoginDialog'
 import GithubWriteCard from './GithubWriteCard'
-import { MarkdownBody } from '@app'
+import { MarkdownBody, PageContainer } from '@app'
 import { formatDate } from '@core/lib/utils'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle,
@@ -652,7 +652,7 @@ export default function InsightSettingsPage() {
   }
 
   if (loading) {
-    return <div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div>
+    return <PageContainer><div className="flex justify-center py-24 text-muted-foreground">{t('common.loading')}</div></PageContainer>
   }
 
   const langDirty = data !== null && lang !== null && lang !== data.lang
@@ -665,6 +665,7 @@ export default function InsightSettingsPage() {
   const modelList = isOwner ? allModels : (data?.tldr_allowed_models ?? [])
 
   return (
+    <PageContainer>
     <TooltipProvider delayDuration={300}>
       <div className="space-y-3">
         {/* AI access + Language */}
@@ -1087,5 +1088,6 @@ export default function InsightSettingsPage() {
         />
       </div>
     </TooltipProvider>
+    </PageContainer>
   )
 }
