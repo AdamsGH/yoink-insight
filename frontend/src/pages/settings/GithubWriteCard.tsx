@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, ExternalLink, Loader2, Star } from 'lucide-react'
+import { Check, Copy, ExternalLink, GitBranch, Loader2 } from 'lucide-react'
 import { toast } from '@core/components/ui/toast'
 
 import {
-  Badge,
   Button,
   Card,
   CardContent,
@@ -18,11 +17,6 @@ import {
 
 import { insightApi, type GithubDeviceFlowStatus } from '@insight/api/insight'
 
-// Standalone card shown in Insight settings when the public_repo OAuth App
-// is configured server-side (configured=true from /github/write-token/status).
-// Mirrors GithubLoginDialog but uses the upgrade-scope endpoints so the
-// read:user token is never touched.
-
 export function GithubWriteCard() {
   const [status, setStatus] = useState<{ enabled: boolean; configured: boolean } | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -31,9 +25,7 @@ export function GithubWriteCard() {
     try {
       const r = await insightApi.getWriteTokenStatus()
       setStatus(r.data)
-    } catch {
-      // not critical
-    }
+    } catch { /* not critical */ }
   }, [])
 
   useEffect(() => { void reload() }, [reload])
@@ -53,31 +45,43 @@ export function GithubWriteCard() {
   return (
     <>
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Star className="h-4 w-4" />
-            GitHub Write Access
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Allows yoink to star and unstar repositories on your behalf. Uses a separate OAuth
-            App with <code className="text-xs">public_repo</code> scope; your read-only token
-            is not affected.
-          </p>
-          <div className="flex items-center gap-3">
-            {status.enabled
-              ? <Badge variant="default">Connected</Badge>
-              : <Badge variant="secondary">Not connected</Badge>
-            }
+        <CardHeader className="px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <GitBranch className="h-4 w-4 shrink-0 text-primary" />
+              GitHub write access
+              {status.enabled && (
+                <span className="text-xs font-medium text-green-500">&#x2713;</span>
+              )}
+            </CardTitle>
             {status.enabled ? (
-              <Button size="sm" variant="outline" onClick={onRevoke}>Revoke</Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={onRevoke}
+              >
+                Revoke
+              </Button>
             ) : (
-              <Button size="sm" onClick={() => setDialogOpen(true)}>
-                Connect write access
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => setDialogOpen(true)}
+              >
+                Connect
               </Button>
             )}
           </div>
+        </CardHeader>
+        <CardContent className="px-4 pb-3">
+          <p className="text-xs text-muted-foreground">
+            Allows starring and unstarring repos from yoink. Uses a separate OAuth App with{' '}
+            <code className="font-mono">public_repo</code> scope; your read-only token is not affected.
+          </p>
         </CardContent>
       </Card>
 
@@ -129,7 +133,7 @@ function UpgradeScopeDialog({
       }
       if (next.status === 'success') {
         toast.success(next.username
-          ? `GitHub write access connected as @${next.username}`
+          ? `Connected as @${next.username}`
           : 'GitHub write access connected.')
         onSuccess()
         return
@@ -186,7 +190,7 @@ function UpgradeScopeDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Star className="h-4 w-4" />
+            <GitBranch className="h-4 w-4" />
             Connect GitHub write access
           </DialogTitle>
         </DialogHeader>
@@ -194,34 +198,45 @@ function UpgradeScopeDialog({
           {starting && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Asking GitHub for a device code...
+              Requesting device code...
             </div>
           )}
           {!starting && flowStatus?.user_code && (
             <>
               <p className="text-sm leading-snug text-muted-foreground">
-                Copy the code below, open GitHub's device login page, and paste it in. You will be
-                asked to authorise <strong>public_repo</strong> access.
+                Copy the code, open GitHub's device page, and paste it in. You'll be asked to
+                authorise <code className="font-mono text-xs">public_repo</code> access.
               </p>
-              <div className="relative rounded-lg bg-background ring-1 ring-inset ring-border px-4 py-4">
-                <span className="block text-center font-mono text-2xl font-semibold tracking-[0.4em] select-all">
+              <div className="relative rounded-lg bg-background px-4 py-4 ring-1 ring-inset ring-border">
+                <span className="block select-all text-center font-mono text-2xl font-semibold tracking-[0.4em]">
                   {flowStatus.user_code}
                 </span>
-                <Button type="button" size="sm" variant="ghost"
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 h-8 w-8 p-0"
-                  onClick={() => { void copyCode() }}>
-                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="absolute right-1.5 top-1/2 h-8 w-8 -translate-y-1/2 p-0"
+                  onClick={() => { void copyCode() }}
+                >
+                  {copied
+                    ? <Check className="h-4 w-4 text-green-500" />
+                    : <Copy className="h-4 w-4" />}
                 </Button>
               </div>
-              <Button type="button" size="sm" variant="outline" className="w-full"
-                onClick={() => window.open(flowStatus.verification_uri, '_blank', 'noopener,noreferrer')}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full"
+                onClick={() => window.open(flowStatus.verification_uri, '_blank', 'noopener,noreferrer')}
+              >
                 <ExternalLink className="mr-2 h-4 w-4" />
                 Open github.com/login/device
               </Button>
               {flowStatus.status === 'pending' && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Waiting for you to authorise on GitHub...
+                  Waiting for authorisation on GitHub...
                 </div>
               )}
             </>
@@ -229,8 +244,8 @@ function UpgradeScopeDialog({
           {(flowStatus?.status === 'expired' || flowStatus?.status === 'error' || error) && (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error ?? flowStatus?.error ?? (flowStatus?.status === 'expired'
-                ? 'Code expired, start a new login.'
-                : 'Login failed.')}
+                ? 'Code expired, try again.'
+                : 'Connection failed.')}
             </div>
           )}
         </div>
