@@ -25,6 +25,7 @@ class InsightUserSettings(Base):
     lang: Mapped[str] = mapped_column(String(8), default="en", nullable=False)
     tldr_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     github_token: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    github_token_public_repo: Mapped[str | None] = mapped_column(String(256), nullable=True)
     use_search: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 

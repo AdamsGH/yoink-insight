@@ -6,6 +6,7 @@ import { BrainCircuit, ChevronDown, FileText, KeyRound, Link, LockKeyhole, Messa
 import { insightApi, type ByokConfig, type InsightSettings, type InsightSettingsPatch, type TldrAlias, type TldrAliasInput } from '@insight/api/insight'
 import ByokCard from './ByokCard'
 import GithubLoginDialog from './GithubLoginDialog'
+import GithubWriteCard from './GithubWriteCard'
 import { MarkdownBody } from '@app'
 import { formatDate } from '@core/lib/utils'
 import {
@@ -884,6 +885,8 @@ export default function InsightSettingsPage() {
             }).catch(() => {})
           }}
         />
+
+        <GithubWriteCard />
 
         {/* Save */}
         {dirty && (

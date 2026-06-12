@@ -43,3 +43,8 @@ class InsightConfig(BaseSettings):
     # Max successful /tldr calls per user per UTC day. 0 disables.
     tldr_rate_limit_per_day: int = 20
     github_token: str | None = None
+
+    # --- GitHub write access (star/unstar) ---
+    # Separate OAuth App with public_repo scope. Leave empty to disable gh_write feature.
+    github_oauth_public_repo_client_id: str = ""
+    github_oauth_public_repo_client_secret: str = ""

@@ -1393,3 +1393,92 @@ async def delete_github_token(
     sf = request.app.state.session_factory
     await InsightUserSettingsRepo(sf).set_github_token(current_user.id, None)
     await github_device.cancel_device_flow(current_user.id)
+
+
+# ---------------------------------------------------------------------------
+# GitHub write access (public_repo device flow)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/github/upgrade-scope", summary="Start public_repo device-flow (star/unstar)")
+async def start_public_repo_login(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Begin a second GitHub device-flow for the public_repo-scoped OAuth App.
+
+    The resulting token is stored separately in github_token_public_repo and
+    never overwrites the base read:user token. Returns the same shape as
+    /github/login so the frontend can reuse the same polling component.
+    """
+    from yoink_insight.services import github_device
+    from yoink_insight.config import InsightConfig
+
+    cfg = InsightConfig()
+    if not cfg.github_oauth_public_repo_client_id:
+        raise HTTPException(status_code=501, detail="public_repo OAuth App not configured")
+
+    sf = request.app.state.session_factory
+    try:
+        state = await github_device.start_public_repo_flow(
+            current_user.id, sf, cfg.github_oauth_public_repo_client_id
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub device-code request failed: {exc!r}")
+    return {
+        "user_code": state.user_code,
+        "verification_uri": state.verification_uri,
+        "expires_at": state.expires_at,
+        "interval": state.interval,
+        "status": state.status,
+    }
+
+
+@router.get("/github/upgrade-scope/status", summary="Poll public_repo device-flow status")
+async def get_public_repo_login_status(
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    from yoink_insight.services import github_device
+
+    state = await github_device.get_public_repo_flow_status(current_user.id)
+    if state is None:
+        return {"status": "none"}
+    return {
+        "status": state.status,
+        "user_code": state.user_code,
+        "verification_uri": state.verification_uri,
+        "expires_at": state.expires_at,
+        "interval": state.interval,
+        "error": state.error,
+        "username": state.username,
+    }
+
+
+@router.delete("/github/write-token", status_code=204, summary="Revoke public_repo token")
+async def delete_public_repo_token(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> None:
+    from yoink_insight.services import github_device
+    from yoink_insight.storage.repos import InsightUserSettingsRepo
+
+    sf = request.app.state.session_factory
+    await InsightUserSettingsRepo(sf).set_github_token_public_repo(current_user.id, None)
+    await github_device.cancel_public_repo_flow(current_user.id)
+
+
+@router.get("/github/write-token/status", summary="Check public_repo token presence")
+async def get_write_token_status(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    from yoink_insight.storage.repos import InsightUserSettingsRepo
+    from yoink_insight.config import InsightConfig
+
+    sf = request.app.state.session_factory
+    token = await InsightUserSettingsRepo(sf).get_github_token_public_repo(current_user.id)
+    cfg = InsightConfig()
+    return {
+        "enabled": bool(token),
+        "configured": bool(cfg.github_oauth_public_repo_client_id),
+    }

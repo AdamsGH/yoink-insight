@@ -196,4 +196,17 @@ export const insightApi = {
 
   deleteGithubToken: () =>
     apiClient.delete('/insight/github/token'),
+
+  // GitHub write access (public_repo scope)
+  startPublicRepoLogin: () =>
+    apiClient.post<GithubDeviceFlowStart>('/insight/github/upgrade-scope'),
+
+  getPublicRepoLoginStatus: () =>
+    apiClient.get<GithubDeviceFlowStatus>('/insight/github/upgrade-scope/status'),
+
+  getWriteTokenStatus: () =>
+    apiClient.get<{ enabled: boolean; configured: boolean }>('/insight/github/write-token/status'),
+
+  deleteWriteToken: () =>
+    apiClient.delete('/insight/github/write-token'),
 }
