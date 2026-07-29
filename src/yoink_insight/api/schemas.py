@@ -57,6 +57,8 @@ class TldrConfigResponse(BaseModel):
     default_model: str
     gateway_base_url: str
     gateway_api_key: str
+    openrouter_api_key: str
+    ai_route_mode: str
 
 
 class TldrConfigUpdate(BaseModel):
@@ -64,6 +66,8 @@ class TldrConfigUpdate(BaseModel):
     default_model: str
     gateway_base_url: str
     gateway_api_key: str
+    openrouter_api_key: str
+    ai_route_mode: str
 
 
 class UserLookupResult(BaseModel):

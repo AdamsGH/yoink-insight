@@ -19,6 +19,8 @@ export default function TldrConfigPage() {
   const [defaultModel, setDefaultModel] = useState('')
   const [gatewayUrl, setGatewayUrl] = useState('')
   const [gatewayKey, setGatewayKey] = useState('')
+  const [openrouterKey, setOpenrouterKey] = useState('')
+  const [routeMode, setRouteMode] = useState<'a2a' | 'openrouter' | 'auto'>('auto')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -40,6 +42,8 @@ export default function TldrConfigPage() {
         setDefaultModel(cfgRes.data.default_model)
         setGatewayUrl(cfgRes.data.gateway_base_url)
         setGatewayKey(cfgRes.data.gateway_api_key)
+        setOpenrouterKey(cfgRes.data.openrouter_api_key)
+        setRouteMode(cfgRes.data.ai_route_mode)
         setAllModels(modelsRes.data)
         setByokAdmin(byokRes.data)
       })
@@ -122,12 +126,16 @@ export default function TldrConfigPage() {
         default_model: defaultModel,
         gateway_base_url: gatewayUrl,
         gateway_api_key: gatewayKey,
+        openrouter_api_key: openrouterKey,
+        ai_route_mode: routeMode,
       })
       setConfig(res.data)
       setAllowed(res.data.allowed_models)
       setDefaultModel(res.data.default_model)
       setGatewayUrl(res.data.gateway_base_url)
       setGatewayKey(res.data.gateway_api_key)
+      setOpenrouterKey(res.data.openrouter_api_key)
+      setRouteMode(res.data.ai_route_mode)
       toast.success(t('common.saved'))
     } catch {
       toast.error(t('common.load_error'))
@@ -147,7 +155,9 @@ export default function TldrConfigPage() {
     JSON.stringify([...allowed].sort()) !== JSON.stringify([...config.allowed_models].sort()) ||
     defaultModel !== config.default_model ||
     gatewayUrl !== config.gateway_base_url ||
-    gatewayKey !== config.gateway_api_key
+    gatewayKey !== config.gateway_api_key ||
+    openrouterKey !== config.openrouter_api_key ||
+    routeMode !== config.ai_route_mode
   )
 
   return (
@@ -184,11 +194,11 @@ export default function TldrConfigPage() {
         </Card>
       )}
 
-      {/* Gateway connection */}
+      {/* AI routing */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base">
-            {t('insight.tldr_gateway_title', { defaultValue: 'Gateway' })}
+            {t('insight.tldr_gateway_title', { defaultValue: 'AI routing' })}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -204,8 +214,16 @@ export default function TldrConfigPage() {
             />
           </div>
           <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">{t('insight.tldr_route_label', { defaultValue: 'Target' })}</Label>
+            <select className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={routeMode} onChange={(e) => setRouteMode(e.target.value as 'a2a' | 'openrouter' | 'auto')}>
+              <option value="auto">A2A, fallback to OpenRouter</option>
+              <option value="a2a">A2A only</option>
+              <option value="openrouter">OpenRouter only</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">
-              {t('insight.tldr_gateway_key_label', { defaultValue: 'API key' })}
+              A2A {t('insight.tldr_gateway_key_label', { defaultValue: 'API key' })}
             </Label>
             <Input
               value={gatewayKey}
@@ -214,6 +232,10 @@ export default function TldrConfigPage() {
               type="password"
               className="font-mono text-xs"
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">OpenRouter API key</Label>
+            <Input value={openrouterKey} onChange={(e) => setOpenrouterKey(e.target.value)} type="password" className="font-mono text-xs" placeholder="Set in .env or here" />
           </div>
           <div className="flex items-center gap-2">
             <Button

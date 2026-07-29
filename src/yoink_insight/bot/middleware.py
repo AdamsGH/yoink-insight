@@ -67,8 +67,12 @@ async def get_effective_insight_config(context: ContextTypes.DEFAULT_TYPE) -> In
     gw_url = await repo.get("insight_tldr_gateway_url") or config.gateway_base_url
     gw_key = await repo.get("insight_tldr_gateway_key") or config.gateway_api_key
     default_model = await repo.get("insight_tldr_default_model") or config.tldr_llm_model
+    openrouter_key = await repo.get("insight_tldr_openrouter_key") or config.openrouter_api_key
+    route_mode = await repo.get("insight_tldr_route_mode") or config.ai_route_mode
     cfg = copy.copy(config)
     cfg.gateway_base_url = gw_url
     cfg.gateway_api_key = gw_key
+    cfg.openrouter_api_key = openrouter_key
+    cfg.ai_route_mode = route_mode
     cfg.tldr_llm_model = default_model
     return cfg

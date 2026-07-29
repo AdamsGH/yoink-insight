@@ -22,7 +22,7 @@ Included in yoink-core as a git submodule at `plugins/yoink-insight`.
 | `/insight_revoke <id>` | admin | private | Revoke Insight access |
 | `/insight_list` | admin | private | List Insight access |
 
-`/tldr` accepts YouTube links, web articles, or any publicly reachable URL. For YouTube it fetches the transcript from the gateway (`POST /youtube/transcript`); for other URLs it fetches HTML with httpx and extracts main text via trafilatura.
+`/tldr` accepts YouTube links, web articles, or any publicly reachable URL. For YouTube it fetches the transcript with `youtube-transcript-api`, using `proxy_url` when configured; for other URLs it fetches HTML with httpx and extracts main text via trafilatura.
 
 ## RBAC
 
@@ -46,7 +46,7 @@ All three features are independent: a user can have `insight:tldr` without `insi
 ```
 /tldr <url> [question]
        |
-       +-- YouTube? --> gateway POST /youtube/transcript (cascade: transcript_api -> yt-dlp + bgutil POT)
+       +-- YouTube? --> youtube-transcript-api (through proxy_url when configured)
        |
        +-- Web page --> httpx GET + trafilatura text extraction
        |
@@ -196,10 +196,10 @@ All variables come from `.env` via `InsightConfig(BaseSettings)`.
 |---|---|---|---|
 | `gateway_base_url` | no | `http://gateway:4060` | Base URL for gateway (transcript + LLM) |
 | `gateway_api_key` | no | - | API key for gateway requests (`X-API-Key` / `Authorization: Bearer`) |
-| `tldr_llm_model` | no | `cpa/anthropic/claude-haiku-4-5` | Default LLM model string (overridden by admin config and per-user choice) |
+| `tldr_llm_model` | no | empty | Optional bootstrap model; admin config is the source of truth |
 | `tldr_max_content_chars` | no | `40000` | Max characters of extracted web content sent to LLM |
 | `tldr_rate_limit_per_day` | no | `20` | Per-user daily /tldr cap (fresh API hits only; 0 disables) |
-| `proxy_url` (env) | no | - | Optional socks5/http proxy for HTML and markdown-provider fallbacks (`github.com`, `raw.githubusercontent.com`, `r.jina.ai`) when the host can't reach them directly. The GitHub API path (`api.github.com`) does not use it. |
+| `proxy_url` (env) | no | - | Optional SOCKS5/HTTP proxy for YouTube transcript requests and HTML/markdown-provider fallbacks (`github.com`, `raw.githubusercontent.com`, `r.jina.ai`) when the host cannot reach them directly. The GitHub API path (`api.github.com`) does not use it. |
 
 ### GitHub token (per-user, optional)
 
@@ -234,7 +234,7 @@ Mounted at `/api/v1/insight/`. Auth: JWT Bearer token.
 | GET | /settings/me | Own settings: lang, access flags, tldr_model, tldr_allowed_models, prompts, aliases |
 | PATCH | /settings/me | Update lang, tldr_model, use_search, github_token, and per-command prompt overrides |
 
-`PATCH /settings/me` body: `{ "lang": "ru", "tldr_model": "cpa/anthropic/claude-haiku-4-5" }`. Non-owner users can only set a model from the admin-configured allowed list. `github_token` accepts an empty string to clear.
+`PATCH /settings/me` body: `{ "lang": "ru", "tldr_model": "or/anthropic/claude-haiku-4.5" }`. Non-owner users can only set a model from the admin-configured allowed list. `github_token` accepts an empty string to clear.
 
 ### GitHub OAuth device-flow login (per-user)
 
@@ -275,7 +275,7 @@ Token is stored in `insight_user_settings.github_token_public_repo`. The `config
 | GET | /config/tldr | Current allowed_models list and default_model |
 | PATCH | /config/tldr | Update allowed_models and default_model |
 
-Body: `{ "allowed_models": ["cpa/anthropic/claude-haiku-4-5", "or/openai/gpt-4o-mini"], "default_model": "cpa/anthropic/claude-haiku-4-5" }`.
+Body: `{ "allowed_models": ["or/anthropic/claude-haiku-4.5", "or/openai/gpt-4o-mini"], "default_model": "or/anthropic/claude-haiku-4.5" }`.
 
 ### Models
 

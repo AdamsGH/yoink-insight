@@ -22,6 +22,8 @@ class InsightConfig(BaseSettings):
 
     # Transcript languages to try, in order (comma-separated)
     insight_transcript_langs: str = "en,ru"
+    # Shared HTTP/SOCKS proxy used for YouTube transcript requests.
+    proxy_url: str = ""
 
     # Max successful Gemini calls per user per UTC day. 0 disables the gate.
     # Cached responses do not count against this limit; only fresh API hits do.
@@ -29,13 +31,18 @@ class InsightConfig(BaseSettings):
 
     # --- /tldr settings ---
 
-    # Gateway base URL for YouTube transcript fetching (POST /youtube/transcript)
-    # and for the OpenAI-compatible LLM calls used by /tldr.
-    gateway_base_url: str = "http://gateway:4060"
+    # Primary OpenAI-compatible AI endpoint (auth2api/A2A).
+    gateway_base_url: str = "http://0.0.0.0:8317/v1"
     gateway_api_key: str = ""
+    # Optional OpenRouter fallback. Leave openrouter_api_key empty until configured.
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str = ""
+    # a2a, openrouter, or auto (A2A with OpenRouter fallback).
+    ai_route_mode: str = "auto"
 
-    # OpenAI-compatible model string routed through the gateway (e.g. cpa/anthropic/claude-haiku-4-5)
-    tldr_llm_model: str = "cpa/anthropic/claude-haiku-4.5"
+    # OpenAI-compatible model string routed through A2A.
+    # The admin TLDR setting is the source of truth; this is only a bootstrap fallback.
+    tldr_llm_model: str = ""
 
     # Max context characters sent to the LLM for /tldr (web pages can be huge)
     tldr_max_content_chars: int = 40_000

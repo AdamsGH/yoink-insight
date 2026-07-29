@@ -90,7 +90,7 @@ async def resolve_route(
     base = cfg.gateway_base_url.rstrip("/")
     if not base:
         raise LlmCompletionError("no_route")
-    return _Route(via_byok=False, model=cfg.tldr_llm_model)
+    return _Route(via_byok=False, base_url=base, api_key=cfg.gateway_api_key, model=cfg.tldr_llm_model)
 
 
 async def complete(
@@ -110,7 +110,7 @@ async def complete(
     route = await resolve_route(session_factory, user_id, prefer_byok=prefer_byok)
     if route.via_byok:
         return await _run_byok(route, prompt)
-    return await _run_gateway(prompt, override_model=model, timeout_s=timeout_s)
+    return await _run_gateway(route, prompt, override_model=model, timeout_s=timeout_s)
 
 
 # ---------------------------------------------------------------------------
@@ -139,28 +139,41 @@ async def _run_byok(route: _Route, prompt: str) -> str:
 
 
 async def _run_gateway(
-    prompt: str, *, override_model: str | None, timeout_s: float,
+    route: _Route, prompt: str, *, override_model: str | None, timeout_s: float,
 ) -> str:
-    cfg = InsightConfig()
-    base = cfg.gateway_base_url.rstrip("/")
+    base = route.base_url or ""
     endpoint = f"{base}/v1/chat/completions"
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    if cfg.gateway_api_key:
-        headers["Authorization"] = f"Bearer {cfg.gateway_api_key}"
+    if route.api_key:
+        headers["Authorization"] = f"Bearer {route.api_key}"
 
     body = {
-        "model": override_model or cfg.tldr_llm_model,
+        "model": override_model or route.model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
     }
 
+    cfg = InsightConfig()
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             r = await client.post(endpoint, json=body, headers=headers)
+            if cfg.ai_route_mode == "auto" and (r.status_code >= 500 or r.status_code == 404) and cfg.openrouter_api_key:
+                endpoint = cfg.openrouter_base_url.rstrip("/") + "/chat/completions"
+                headers["Authorization"] = f"Bearer {cfg.openrouter_api_key}"
+                r = await client.post(endpoint, json=body, headers=headers)
     except httpx.HTTPError as exc:
-        logger.error("llm.complete gateway transport failed: %r", exc)
-        raise LlmCompletionError("provider_unavailable") from exc
+        logger.error("llm.complete A2A transport failed: %r", exc)
+        if cfg.ai_route_mode == "auto" and cfg.openrouter_api_key:
+            try:
+                async with httpx.AsyncClient(timeout=timeout_s) as client:
+                    endpoint = cfg.openrouter_base_url.rstrip("/") + "/chat/completions"
+                    headers["Authorization"] = f"Bearer {cfg.openrouter_api_key}"
+                    r = await client.post(endpoint, json=body, headers=headers)
+            except httpx.HTTPError as fallback_exc:
+                raise LlmCompletionError("provider_unavailable") from fallback_exc
+        else:
+            raise LlmCompletionError("provider_unavailable") from exc
 
     if r.status_code in (401, 403):
         raise LlmCompletionError("auth_failed")

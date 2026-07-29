@@ -7,17 +7,26 @@ Supports:
 """
 from __future__ import annotations
 
+import asyncio
 import fnmatch
+import json
 import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
+from youtube_transcript_api import NoTranscriptFound, TranscriptsDisabled, YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 
 from yoink_insight.config import InsightConfig
-from yoink_insight.services.byok import BYOKError, resolve_base_url, stream_chat as byok_stream_chat
+from yoink_insight.services.byok import BYOKError, resolve_base_url
+from yoink_insight.services.byok import stream_chat as byok_stream_chat
 from yoink_insight.services.fetch import FetchResult, _FetchError, fetch_web_content
-from yoink_insight.services.search_client import SearchFetchError, join_sources_for_llm, search_fetch
+from yoink_insight.services.search_client import (
+    SearchFetchError,
+    join_sources_for_llm,
+    search_fetch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +36,8 @@ _FORMAT_RULES = """\
 Formatting rules (MUST follow):
 - Use standard Markdown: **bold**, *italic*, `code`, ```code block```, [text](url)
 - Bullet points: start each with "- " (hyphen space)
+- When quoting or reproducing a phrase from the source, put the exact source wording on its own line prefixed with "> "; never leave a source quote as plain prose. Do not invent, merge, or paraphrase quotes.
+- Preserve every proper noun, product name, model name, version, number, and named tool exactly as it appears in the source. Never substitute a familiar model or version that the source does not mention.
 - Do NOT use HTML tags (<b>, <i>, etc.)
 - No preamble, no sign-off, output only the requested content
 - Input data may be in TOON format (Token-Oriented Object Notation): YAML-like indentation for objects, CSV-style rows for uniform arrays. Read it as structured data, do NOT reproduce it verbatim in your output.
@@ -43,6 +54,8 @@ of truth, this is the short version):
   and verdict words. `code` for technical identifiers, units, paths,
   error tokens. > blockquote when lifting a phrase from the source.
 - Blank line between every paragraph. No wall of prose.
+- When quoting or reproducing a phrase from the source, put the exact source wording on its own line prefixed with "> "; never leave a source quote as plain prose. Do not invent, merge, or paraphrase quotes.
+- Preserve every proper noun, product name, model name, version, number, and named tool exactly as it appears in the source. Never substitute a familiar model or version that the source does not mention.
 - No HTML tags. No '#' headings. Bullets only when the persona
   instruction explicitly allows them.
 - No preamble, no sign-off, output only the requested content.
@@ -108,7 +121,10 @@ Markdown formatting (the message is rendered, not shown as raw text):
   is wrong: aim for several across the body, not just the opening line.
 - ALWAYS use `code` for product codes, chip names, API names, paths,
   file names, error tokens, command flags, units like `60Hz`, `8kHz`,
-  `IP55`, `MDAQS 4.0`, `Bluetooth 6.1`. If the source mentions a
+  `IP55`, `MDAQS 4.0`, `Bluetooth 6.1`. If the source contains a direct
+  quote or a distinctive phrase worth reproducing, put it on its own line
+  as a Markdown blockquote starting with `> `.
+  If the source mentions a
   technical identifier, it goes in `code`.
 - When a phrase from the source is striking enough to react to, lift
   it into a `> blockquote` line on its own and follow it with your
@@ -171,8 +187,10 @@ _NOBULLSHIT_PROMPT = (
     "lever, OpenAI is locked to Azure, that gap pays the bills' is the "
     "shape; 'Anthropic has AWS access, which is important' is not.\n"
     "\n"
-    "Preserve names, versions, model identifiers, paths, error tokens, "
-    "numbers verbatim. Markdown formatting is required and is detailed "
+    "Preserve every proper noun, product name, model name, version, path, "
+    "error token, and number verbatim. Never substitute a familiar model "
+    "or version that the source does not mention. Markdown formatting is "
+    "required and is detailed "
     "in the reminder below the content. Keep the whole thing under "
     "~3000 characters: chat message, not essay.\n"
     "\n"
@@ -252,50 +270,48 @@ def _is_youtube(url: str) -> bool:
     try:
         host = urlparse(url).hostname or ""
         return host in _YOUTUBE_HOSTS
-    except Exception:
+    except ValueError:
         return False
 
 
-async def _fetch_youtube_transcript(url: str, config: InsightConfig) -> tuple[str, int | None]:
-    """Call gateway POST /youtube/transcript and return (transcript, duration_seconds).
+def _fetch_transcript_sync(
+    video_id: str,
+    languages: tuple[str, ...],
+    proxy_url: str | None = None,
+) -> tuple[str, int | None]:
+    proxy_config = GenericProxyConfig(https_url=proxy_url) if proxy_url else None
+    api = YouTubeTranscriptApi(proxy_config=proxy_config)
+    try:
+        transcript = api.list(video_id).find_transcript(list(languages)).fetch()
+    except (NoTranscriptFound, TranscriptsDisabled) as exc:
+        raise TldrError("no_transcript") from exc
+    except Exception as exc:
+        logger.exception("Native YouTube transcript fetch failed for %s", video_id)
+        raise TldrError("transcript_error") from exc
 
-    duration_seconds is None when the gateway could not determine the length
-    (very old gateway without include_duration support, or all probes failed).
-    The caller is expected to fall back to a word-count heuristic in that case.
-    """
-    endpoint = config.gateway_base_url.rstrip("/") + "/youtube/transcript"
-    headers: dict[str, str] = {}
-    if config.gateway_api_key:
-        headers["X-API-Key"] = config.gateway_api_key
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            resp = await client.post(
-                endpoint,
-                json={
-                    "video_url": url,
-                    "formatter": "text",
-                    "backend": "auto",
-                    "include_duration": True,
-                },
-                headers=headers,
-            )
-        except httpx.RequestError as exc:
-            logger.error("Gateway transcript request failed: %s", exc)
-            raise TldrError("gateway_unavailable") from exc
-
-    if resp.status_code == 200:
-        data = resp.json()
-        transcript = data.get("transcript", "")
-        if not transcript or not transcript.strip():
-            raise TldrError("no_transcript")
-        duration = data.get("duration_seconds")
-        duration_int = int(duration) if isinstance(duration, (int, float)) and duration > 0 else None
-        return transcript, duration_int
-    if resp.status_code == 404:
+    snippets = list(transcript)
+    text = " ".join(item.text.strip() for item in snippets).strip()
+    if not text:
         raise TldrError("no_transcript")
-    logger.error("Gateway transcript returned %d: %s", resp.status_code, resp.text[:200])
-    raise TldrError("transcript_error")
+    last = snippets[-1] if snippets else None
+    duration = int(last.start + last.duration) if last else None
+    return text, duration
+
+
+async def _fetch_youtube_transcript(url: str, config: InsightConfig) -> tuple[str, int | None]:
+    """Fetch a YouTube transcript natively, without the retired gateway."""
+    from yoink_insight.services.gemini import _extract_video_id
+
+    video_id = _extract_video_id(url)
+    if not video_id:
+        raise TldrError("no_transcript")
+    languages = tuple(lang.strip() for lang in config.insight_transcript_langs.split(",") if lang.strip())
+    return await asyncio.to_thread(
+        _fetch_transcript_sync,
+        video_id,
+        languages or ("en", "ru"),
+        config.proxy_url or None,
+    )
 
 
 
@@ -413,7 +429,7 @@ def _url_match_key(url: str) -> str:
         host = (parsed.hostname or "").lower()
         path = parsed.path or ""
         return host + path
-    except Exception:
+    except ValueError:
         return url.lower()
 
 
@@ -531,7 +547,7 @@ async def prepare_tldr(
             logger.info("gateway /v1/search returned empty content for %s, falling back", url)
         except SearchFetchError as exc:
             logger.info("gateway /v1/search failed (%s) for %s, falling back", exc.args, url)
-        except Exception as exc:
+        except (AttributeError, TypeError, ValueError) as exc:
             logger.warning("gateway /v1/search unexpected error for %s: %s", url, exc)
 
     try:
@@ -645,7 +661,7 @@ async def stream_llm(
             raise TldrError(code) from exc
         return
 
-    endpoint = config.gateway_base_url.rstrip("/") + "/v1/chat/completions"
+    endpoint = config.gateway_base_url.rstrip("/") + "/chat/completions"
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if config.gateway_api_key:
         headers["Authorization"] = f"Bearer {config.gateway_api_key}"
@@ -661,7 +677,26 @@ async def stream_llm(
             async with client.stream("POST", endpoint, json=body, headers=headers) as resp:
                 if resp.status_code != 200:
                     body_text = await resp.aread()
-                    logger.error("LLM stream error %d: %s", resp.status_code, body_text[:200])
+                    logger.error("A2A LLM stream error %d: %s", resp.status_code, body_text[:200])
+                    if config.ai_route_mode == "auto" and config.openrouter_api_key:
+                        endpoint = config.openrouter_base_url.rstrip("/") + "/chat/completions"
+                        headers["Authorization"] = f"Bearer {config.openrouter_api_key}"
+                        async with client.stream("POST", endpoint, json=body, headers=headers) as fallback:
+                            if fallback.status_code != 200:
+                                raise TldrError("llm_error")
+                            async for line in fallback.aiter_lines():
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[5:].strip()
+                                if data == "[DONE]":
+                                    break
+                                try:
+                                    delta = json.loads(data)["choices"][0]["delta"].get("content") or ""
+                                    if delta:
+                                        yield delta
+                                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                                    continue
+                        return
                     raise TldrError("llm_error")
 
                 async for line in resp.aiter_lines():
@@ -671,12 +706,12 @@ async def stream_llm(
                     if data == "[DONE]":
                         break
                     try:
-                        import json
                         chunk = json.loads(data)
                         delta = chunk["choices"][0]["delta"].get("content") or ""
                         if delta:
                             yield delta
-                    except Exception:
+                    except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
+                        logger.debug("Skipping malformed LLM stream event")
                         continue
 
         except httpx.RequestError as exc:

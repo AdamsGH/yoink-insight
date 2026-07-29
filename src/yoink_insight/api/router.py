@@ -629,6 +629,8 @@ _TLDR_ALLOWED_KEY = "insight_tldr_allowed_models"
 _TLDR_DEFAULT_KEY = "insight_tldr_default_model"
 _TLDR_GW_URL_KEY = "insight_tldr_gateway_url"
 _TLDR_GW_KEY_KEY = "insight_tldr_gateway_key"
+_TLDR_OR_KEY = "insight_tldr_openrouter_key"
+_TLDR_ROUTE_MODE = "insight_tldr_route_mode"
 _BYOK_ENABLED_KEY = "insight_byok_enabled"
 
 logger = logging.getLogger(__name__)
@@ -690,11 +692,15 @@ async def get_tldr_config(
     default = await _get_tldr_default_model_from_db(session, config)
     gw_url_row = await session.get(BotSetting, _TLDR_GW_URL_KEY)
     gw_key_row = await session.get(BotSetting, _TLDR_GW_KEY_KEY)
+    or_key_row = await session.get(BotSetting, _TLDR_OR_KEY)
+    route_row = await session.get(BotSetting, _TLDR_ROUTE_MODE)
     return TldrConfigResponse(
         allowed_models=allowed,
         default_model=default,
         gateway_base_url=(gw_url_row.value if gw_url_row is not None else None) or config.gateway_base_url,
-        gateway_api_key=(gw_key_row.value if gw_key_row is not None else None) or "",
+        gateway_api_key=(gw_key_row.value if gw_key_row is not None else None) or config.gateway_api_key,
+        openrouter_api_key=(or_key_row.value if or_key_row is not None else None) or config.openrouter_api_key,
+        ai_route_mode=(route_row.value if route_row is not None else None) or config.ai_route_mode,
     )
 
 
@@ -716,6 +722,8 @@ async def update_tldr_config(
         (_TLDR_DEFAULT_KEY, body.default_model),
         (_TLDR_GW_URL_KEY, body.gateway_base_url.rstrip("/")),
         (_TLDR_GW_KEY_KEY, body.gateway_api_key),
+        (_TLDR_OR_KEY, body.openrouter_api_key),
+        (_TLDR_ROUTE_MODE, body.ai_route_mode),
     ]:
         row = await session.get(BotSetting, key)
         if row is None:
@@ -728,6 +736,8 @@ async def update_tldr_config(
         default_model=body.default_model,
         gateway_base_url=body.gateway_base_url.rstrip("/"),
         gateway_api_key=body.gateway_api_key,
+        openrouter_api_key=body.openrouter_api_key,
+        ai_route_mode=body.ai_route_mode,
     )
 
 
@@ -759,7 +769,7 @@ async def test_gateway(
         gw_url, gw_key = url.rstrip("/"), api_key or ""
     else:
         gw_url, gw_key = await _get_gateway_settings(session, config)
-    endpoint = gw_url.rstrip("/") + "/v1/models"
+    endpoint = gw_url.rstrip("/") + ("/models" if gw_url.rstrip("/").endswith("/v1") else "/v1/models")
     headers: dict[str, str] = {}
     if gw_key:
         headers["Authorization"] = f"Bearer {gw_key}"
@@ -790,7 +800,7 @@ async def _get_gateway_settings(session: AsyncSession, config: InsightConfig) ->
 
 async def _fetch_gateway_models(gw_url: str, gw_key: str, config: InsightConfig) -> list[dict]:
     import httpx
-    endpoint = gw_url.rstrip("/") + "/v1/models"
+    endpoint = gw_url.rstrip("/") + ("/models" if gw_url.rstrip("/").endswith("/v1") else "/v1/models")
     headers: dict[str, str] = {}
     if gw_key:
         headers["Authorization"] = f"Bearer {gw_key}"

@@ -30,6 +30,8 @@ export interface TldrConfig {
   default_model: string
   gateway_base_url: string
   gateway_api_key: string
+  openrouter_api_key: string
+  ai_route_mode: 'a2a' | 'openrouter' | 'auto'
 }
 
 export interface GatewayModel {

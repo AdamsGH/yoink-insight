@@ -226,6 +226,8 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ck = cache_key_for_url(url)
     cache_cmd = f"tldr:{alias_key}" if alias_key else "tldr"
     cache_eligible = (question is None) or (alias_key is not None)
+    if cache_eligible:
+        cache_cmd += ":v2"
     cached = await cache_repo.get(ck, lang, cache_cmd) if (cache_repo and cache_eligible) else None
     header = t(alias_header_key(alias_key), lang)
     header_len_u16 = _utf16_len(header)
