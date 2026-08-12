@@ -142,8 +142,13 @@ export const insightApi = {
   patchTldrConfig: (body: TldrConfig) =>
     apiClient.patch<TldrConfig>('/insight/config/tldr', body),
 
-  listModels: () =>
-    apiClient.get<GatewayModel[]>('/insight/models'),
+  listModels: (url?: string, apiKey?: string) => {
+    const params = new URLSearchParams()
+    if (url) params.set('url', url)
+    if (apiKey) params.set('api_key', apiKey)
+    const qs = params.toString()
+    return apiClient.get<GatewayModel[]>(`/insight/models${qs ? `?${qs}` : ''}`)
+  },
 
   testGateway: (url?: string, apiKey?: string) => {
     const params = new URLSearchParams()

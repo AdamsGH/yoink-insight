@@ -745,10 +745,14 @@ async def update_tldr_config(
 async def list_tldr_models(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    url: str | None = Query(default=None),
+    api_key: str | None = Query(default=None),
 ) -> list[dict]:
-    """Owner sees all gateway models (via stored gateway URL); others see the allowed list."""
+    """Owner sees live gateway models; others see the configured allowed list."""
     config = InsightConfig()
     if _is_owner(current_user):
+        if url:
+            return await _fetch_gateway_models(url.rstrip("/"), api_key or "", config)
         gw_url, gw_key = await _get_gateway_settings(session, config)
         return await _fetch_gateway_models(gw_url, gw_key, config)
     allowed = await _get_tldr_allowed_models_from_db(session, config)

@@ -155,19 +155,22 @@ export default function ByokCard({ data, onChange }: Props) {
     if (!data.has_config) return
     setRefreshing(true)
     try {
-      const res = await insightApi.refreshByokModels()
-      setModels(res.data.models)
-      onChange(res.data)
-      if (res.data.test_error) {
-        toast.error(t(`insight.byok.test_err.${res.data.test_error}`, {
-          defaultValue: res.data.test_error,
+      const res = await insightApi.testByok({
+        provider,
+        base_url: baseUrl.trim() || null,
+        api_key: apiKey === KEY_KEEP ? null : apiKey,
+      })
+      if (!res.data.ok) {
+        toast.error(t(`insight.byok.test_err.${res.data.error}`, {
+          defaultValue: res.data.error ?? 'Probe failed',
         }))
-      } else {
-        toast.success(t('insight.byok.test_ok', {
-          defaultValue: '{{count}} models available',
-          count: res.data.models.length,
-        }))
+        return
       }
+      setModels(res.data.models)
+      toast.success(t('insight.byok.test_ok', {
+        defaultValue: '{{count}} models available',
+        count: res.data.models.length,
+      }))
     } catch {
       toast.error(t('common.load_error'))
     } finally {
@@ -354,7 +357,7 @@ export default function ByokCard({ data, onChange }: Props) {
             </div>
             <Combobox<ByokModelInfo>
               value={selectedModelInfo}
-              onValueChange={(m: ByokModelInfo | null) => { if (m) setModel(m.id) }}
+              onValueChange={(m: ByokModelInfo | null) => setModel(m?.id ?? '')}
               items={models}
               itemToStringLabel={(m: ByokModelInfo) => m.id}
               itemToStringValue={(m: ByokModelInfo) => m.id}
@@ -362,6 +365,7 @@ export default function ByokCard({ data, onChange }: Props) {
               <ComboboxInput
                 placeholder={t('insight.byok.model_placeholder', { defaultValue: 'Select model...' })}
                 className="h-8 text-xs font-mono w-full"
+                showClear
               />
               <ComboboxContent>
                 <ComboboxEmpty>{t('common.no_results', { defaultValue: 'No models found' })}</ComboboxEmpty>

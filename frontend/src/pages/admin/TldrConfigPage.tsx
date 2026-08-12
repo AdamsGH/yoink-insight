@@ -71,7 +71,7 @@ export default function TldrConfigPage() {
       const res = await insightApi.testGateway(gatewayUrl, gatewayKey || undefined)
       setTestResult(res.data)
       if (res.data.ok) {
-        const modelsRes = await insightApi.listModels()
+        const modelsRes = await insightApi.listModels(gatewayUrl, gatewayKey || undefined)
         setAllModels(modelsRes.data)
       }
     } catch {
@@ -84,7 +84,7 @@ export default function TldrConfigPage() {
   const refreshModels = async () => {
     setRefreshingModels(true)
     try {
-      const res = await insightApi.listModels()
+      const res = await insightApi.listModels(gatewayUrl, gatewayKey || undefined)
       setAllModels(res.data)
       toast.success(`${res.data.length} models loaded`)
     } catch {
