@@ -355,6 +355,8 @@ async def stream_chat(
     api_key: str,
     model: str,
     prompt: str,
+    *,
+    proxy_url: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream LLM completion chunks for a single-user-message prompt.
 
@@ -365,10 +367,10 @@ async def stream_chat(
         raise BYOKError(f"unknown_provider:{provider}")
 
     if spec.api_shape == "openai":
-        async for chunk in _stream_openai(base_url, api_key, model, prompt):
+        async for chunk in _stream_openai(base_url, api_key, model, prompt, proxy_url=proxy_url):
             yield chunk
     else:
-        async for chunk in _stream_anthropic(base_url, api_key, model, prompt):
+        async for chunk in _stream_anthropic(base_url, api_key, model, prompt, proxy_url=proxy_url):
             yield chunk
 
 
@@ -409,7 +411,12 @@ def _classify_provider_status(status: int) -> str:
 
 
 async def _stream_openai(
-    base_url: str, api_key: str, model: str, prompt: str
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    *,
+    proxy_url: str | None = None,
 ) -> AsyncIterator[str]:
     endpoint = base_url.rstrip("/") + "/chat/completions"
     body = {
@@ -417,7 +424,7 @@ async def _stream_openai(
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
     }
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=120.0, proxy=proxy_url or None) as client:
         try:
             async with client.stream("POST", endpoint, json=body, headers=_openai_headers(api_key)) as resp:
                 if resp.status_code != 200:
@@ -451,7 +458,12 @@ async def _stream_openai(
 
 
 async def _stream_anthropic(
-    base_url: str, api_key: str, model: str, prompt: str
+    base_url: str,
+    api_key: str,
+    model: str,
+    prompt: str,
+    *,
+    proxy_url: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream Anthropic Messages API SSE, emit content deltas as plain strings.
 
@@ -469,7 +481,7 @@ async def _stream_anthropic(
     headers = _anthropic_headers(api_key)
     headers["accept"] = "text/event-stream"
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=120.0, proxy=proxy_url or None) as client:
         try:
             async with client.stream("POST", endpoint, json=body, headers=headers) as resp:
                 if resp.status_code != 200:

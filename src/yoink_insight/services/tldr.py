@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
-import json
 import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-import httpx
 from youtube_transcript_api import NoTranscriptFound, TranscriptsDisabled, YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
 
@@ -584,6 +582,30 @@ class ByokRoute:
     model: str
 
 
+@dataclass(frozen=True)
+class _LlmRoute:
+    provider: str
+    base_url: str
+    api_key: str
+    proxy_url: str | None = None
+
+
+def _resolve_llm_routes(config: InsightConfig) -> list[_LlmRoute]:
+    """Build the ordered provider route from the persisted admin mode."""
+    gateway = _LlmRoute("custom_openai", config.gateway_base_url, config.gateway_api_key)
+    openrouter = _LlmRoute(
+        "openrouter",
+        config.openrouter_base_url,
+        config.openrouter_api_key,
+        config.proxy_url or None,
+    )
+    if config.ai_route_mode == "openrouter":
+        return [openrouter]
+    if config.ai_route_mode == "auto" and config.openrouter_api_key:
+        return [gateway, openrouter]
+    return [gateway]
+
+
 async def resolve_tldr_route(user_id: int, context) -> ByokRoute | None:
     """Return a ByokRoute when /tldr should bypass the gateway for this user.
 
@@ -654,69 +676,47 @@ async def stream_llm(
             logger.error("BYOK base url resolution failed: %s", exc)
             raise TldrError("llm_error") from exc
         try:
-            async for delta in byok_stream_chat(byok.provider, base, byok.api_key, byok.model, prompt):
+            async for delta in byok_stream_chat(
+                byok.provider,
+                base,
+                byok.api_key,
+                byok.model,
+                prompt,
+                proxy_url=config.proxy_url if byok.provider == "openrouter" else None,
+            ):
                 yield delta
         except BYOKError as exc:
             code = exc.args[0] if exc.args else "llm_error"
             raise TldrError(code) from exc
         return
 
-    endpoint = config.gateway_base_url.rstrip("/") + "/chat/completions"
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if config.gateway_api_key:
-        headers["Authorization"] = f"Bearer {config.gateway_api_key}"
-
-    body = {
-        "model": model or config.tldr_llm_model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": True,
-    }
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    routes = _resolve_llm_routes(config)
+    selected_model = model or config.tldr_llm_model
+    for index, route in enumerate(routes):
+        emitted = False
         try:
-            async with client.stream("POST", endpoint, json=body, headers=headers) as resp:
-                if resp.status_code != 200:
-                    body_text = await resp.aread()
-                    logger.error("A2A LLM stream error %d: %s", resp.status_code, body_text[:200])
-                    if config.ai_route_mode == "auto" and config.openrouter_api_key:
-                        endpoint = config.openrouter_base_url.rstrip("/") + "/chat/completions"
-                        headers["Authorization"] = f"Bearer {config.openrouter_api_key}"
-                        async with client.stream("POST", endpoint, json=body, headers=headers) as fallback:
-                            if fallback.status_code != 200:
-                                raise TldrError("llm_error")
-                            async for line in fallback.aiter_lines():
-                                if not line.startswith("data:"):
-                                    continue
-                                data = line[5:].strip()
-                                if data == "[DONE]":
-                                    break
-                                try:
-                                    delta = json.loads(data)["choices"][0]["delta"].get("content") or ""
-                                    if delta:
-                                        yield delta
-                                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-                                    continue
-                        return
-                    raise TldrError("llm_error")
-
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        delta = chunk["choices"][0]["delta"].get("content") or ""
-                        if delta:
-                            yield delta
-                    except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError):
-                        logger.debug("Skipping malformed LLM stream event")
-                        continue
-
-        except httpx.RequestError as exc:
-            logger.error("LLM stream request failed: %s", exc)
-            raise TldrError("llm_error") from exc
+            async for delta in byok_stream_chat(
+                route.provider,
+                route.base_url,
+                route.api_key,
+                selected_model,
+                prompt,
+                proxy_url=route.proxy_url,
+            ):
+                emitted = True
+                yield delta
+            return
+        except BYOKError as exc:
+            code = exc.args[0] if exc.args else "llm_error"
+            is_last = index == len(routes) - 1
+            if emitted or is_last:
+                raise TldrError(code) from exc
+            logger.warning(
+                "LLM route %s failed before streaming (%s), trying %s",
+                route.provider,
+                code,
+                routes[index + 1].provider,
+            )
 
 
 def cache_key_for_url(url: str) -> str:

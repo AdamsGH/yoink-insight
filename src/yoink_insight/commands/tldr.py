@@ -338,7 +338,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if byok_route is not None:
         llm_desc = f"byok={byok_route.provider}:{byok_route.model}"
     else:
-        llm_desc = f"gateway:{user_model or config.tldr_llm_model}"
+        llm_desc = f"{config.ai_route_mode}:{user_model or config.tldr_llm_model}"
     logger.info(
         "tldr user=%s url=%s via=%s %s content_chars=%d video_seconds=%s alias=%s question=%s",
         user_id, url, prepared.via, llm_desc, len(prepared.content),
