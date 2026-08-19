@@ -39,6 +39,11 @@ export interface GatewayModel {
   [key: string]: unknown
 }
 
+export interface ModelListOptions {
+  url?: string
+  apiKey?: string
+}
+
 export interface TldrAlias {
   id: number
   aliases: string | null
@@ -142,12 +147,20 @@ export const insightApi = {
   patchTldrConfig: (body: TldrConfig) =>
     apiClient.patch<TldrConfig>('/insight/config/tldr', body),
 
-  listModels: (url?: string, apiKey?: string) => {
+  listModels: (options: ModelListOptions = {}) => {
     const params = new URLSearchParams()
-    if (url) params.set('url', url)
-    if (apiKey) params.set('api_key', apiKey)
+    if (options.url) params.set('url', options.url)
+    if (options.apiKey) params.set('api_key', options.apiKey)
     const qs = params.toString()
     return apiClient.get<GatewayModel[]>(`/insight/models${qs ? `?${qs}` : ''}`)
+  },
+
+  listOpenRouterModels: async () => {
+    const response = await fetch('https://openrouter.ai/api/v1/models')
+    if (!response.ok) throw new Error(`OpenRouter models request failed: ${response.status}`)
+    const body = await response.json() as { data?: GatewayModel[] }
+    if (!Array.isArray(body.data)) throw new Error('OpenRouter models response is invalid')
+    return { data: body.data }
   },
 
   testGateway: (url?: string, apiKey?: string) => {
