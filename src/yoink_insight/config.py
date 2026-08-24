@@ -46,6 +46,8 @@ class InsightConfig(BaseSettings):
 
     # Max context characters sent to the LLM for /tldr (web pages can be huge)
     tldr_max_content_chars: int = 40_000
+    tldr_search_model: str = ""
+    tldr_search_timeout_seconds: float = 90.0
 
     # Max successful /tldr calls per user per UTC day. 0 disables.
     tldr_rate_limit_per_day: int = 20

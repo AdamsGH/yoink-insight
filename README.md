@@ -6,7 +6,7 @@ Three independent features, each with its own RBAC grant:
 
 - **AI Summary** (`insight:summary`) - YouTube transcript summarisation via Gemini.
 - **TLDR** (`insight:tldr`) - Summarise any URL (YouTube or web page) via a gateway-routed OpenAI-compatible LLM (default: `claude-haiku-4-5` through the local gateway).
-- **AI Search** (`insight:search`) - Routes summary/tldr requests through the gateway answer engine for web-search-enhanced results.
+- **AI Search** (`insight:search`) - Adds a cited native web-search evidence pass to gateway-routed TLDR analysis.
 
 Included in yoink-core as a git submodule at `plugins/yoink-insight`.
 
@@ -16,13 +16,13 @@ Included in yoink-core as a git submodule at `plugins/yoink-insight`.
 |---|---|---|---|
 | `/about <url>` | `insight:summary` | any | Describe a YouTube video (2-3 sentences) |
 | `/summary <url>` | `insight:summary` | any | Summarize a YouTube video (bullet points) |
-| `/tldr <url> [question]` | `insight:tldr` | any | Summarize any URL (+ max / nobullshit / tale modifiers) |
+| `/tldr <url> [alias] [focus]` | `insight:tldr` | any | Summarize or evaluate any URL with optional max, nobullshit, or tale mode |
 | `/insight_lang <code>` | `insight:summary` | private | Set Insight language |
 | `/insight_grant <id>` | admin | private | Grant Insight access |
 | `/insight_revoke <id>` | admin | private | Revoke Insight access |
 | `/insight_list` | admin | private | List Insight access |
 
-`/tldr` accepts YouTube links, web articles, or any publicly reachable URL. For YouTube it fetches the transcript with `youtube-transcript-api`, using `proxy_url` when configured; for other URLs it fetches HTML with httpx and extracts main text via trafilatura.
+`/tldr` accepts YouTube links, web articles, or any publicly reachable URL. The first token after the URL selects a built-in or user alias when it matches one. Any remaining text becomes the mandatory focus inside that mode. For YouTube it fetches the transcript with `youtube-transcript-api`, using `proxy_url` when configured. For other URLs it fetches HTML with httpx and extracts main text via trafilatura.
 
 ## RBAC
 
@@ -32,7 +32,7 @@ Three `FeatureSpec` objects, all `default_min_role=None` (explicit grant require
 |---|---|---|
 | `insight:summary` | AI Summary | `/summary` and `/about` commands (YouTube transcript + Gemini) |
 | `insight:tldr` | TL;DR | `/tldr` command (any URL summarised via gateway LLM) |
-| `insight:search` | AI Search | Routes `/summary`, `/about`, and `/tldr` through the gateway answer engine; enables web-search and smart scrape |
+| `insight:search` | AI Search | Adds cited Responses web search evidence to gateway-routed `/tldr` requests |
 
 Grants are managed via:
 - Web dashboard: admin users panel (Permissions tab per user)
@@ -64,17 +64,17 @@ Responses stream progressively via Telegram's `sendMessageDraft` extension (same
 
 ### Built-in alias prompts
 
-`/tldr <url> <alias>` or a domain-binding row in `insight_tldr_aliases` swaps the default summariser instruction for a built-in persona. The resolved alias prompt is passed as `alias_instruction` to `_build_prompt`, which renders it as a system-style instruction (not a 'question'). The persona text is repeated front-and-back of the prompt with an anchor reminder of structural rules right before generation, so haiku-class models stay in character on long transcripts.
+`/tldr <url> <alias> [focus]` or a domain-binding row in `insight_tldr_aliases` selects an analysis mode. The alias controls method, shape, and voice. The optional focus narrows the work without replacing that mode. The resolved alias prompt is passed as `alias_instruction` to `_build_prompt` and repeated after the source with an anchor reminder before generation.
 
 | Alias | Shape | Notes |
 |---|---|---|
 | `max` | Thorough breakdown with headings and lists | Full coverage, technical detail preserved |
-| `nobullshit` / `noshit` | Bold verdict line + pointed commentary | Calls out hype, names solid craft in the same voice |
+| `nobullshit` / `noshit` | Evidence verdict + claim-by-claim review | Separates source claims from corroborated facts, checks benchmark controls and unsupported generalization, and discusses affiliations only with evidence |
 | `tale` | 2-4 short paragraphs of third-person retelling | No lists, no headings, no wrap-up |
 
 All aliases enforce Markdown formatting: `**bold**` for names/numbers/verdicts, `` `code` `` for technical identifiers (versions, units, paths, error tokens), `> blockquote` when lifting a phrase from the source, blank lines between paragraphs. The detailed format rules sit in `_ALIAS_ANCHOR` at the very end of the prompt where they have the most weight on Haiku-class models.
 
-Deliberately NOT sent to the model: the source URL, domain, or 'YouTube video' framing. `_build_prompt` keeps `source_desc` in the signature but ignores it, so the model sees only the content body. This avoids generic 'this video explains' framing and trips fewer media-related policy refusals.
+The source URL, domain, and media framing are not included in the summarization prompt. `_build_prompt` keeps `source_desc` in the interface but does not expose it to the model. This reduces generic source narration. When AI Search is enabled, retrieved pages keep their own titles and URLs in a separately labelled independent research block.
 
 ### Markdown-provider chrome stripping
 
@@ -110,7 +110,9 @@ Supported providers:
 | `custom_openai` | user-supplied | `Authorization: Bearer` | any OpenAI-compatible endpoint |
 | `custom_anthropic` | user-supplied | `x-api-key` | any Anthropic-compatible endpoint |
 
-Web-search capability is detected by model id substrings (`sonar*`, `*:online`, `*-search-preview`, `perplexity/*`) plus `provider.all_websearch=True`. Models that match render with a soft emerald tint and a globe icon; picking a model without the marker triggers a confirmation dialog before save.
+Web-search capability is detected by model id substrings (`sonar*`, `*:online`, `*-search-preview`, `perplexity/*`) plus `provider.all_websearch=True`. Models that match render with a soft emerald tint and a globe icon. Picking a model without the marker triggers a confirmation dialog before save.
+
+For the A2A gateway route, the saved AI Search toggle now controls an independent evidence pass through the OpenAI Responses `web_search` tool. The handler rechecks the effective `insight:search` grant at request time. It preserves the original transcript or page as source content and gives the cited search synthesis and source URLs to the LLM in a separate block. Search failure degrades to source-only analysis, and the prompt requires externally checkable claims to remain labelled unverified. Explicit OpenRouter and BYOK routes skip A2A search.
 
 The `/tldr` bot handler picks a path automatically (`services.tldr.resolve_tldr_route`):
 
@@ -197,7 +199,9 @@ All variables come from `.env` via `InsightConfig(BaseSettings)`.
 | `gateway_base_url` | no | `http://gateway:4060` | Base URL for gateway (transcript + LLM) |
 | `gateway_api_key` | no | - | API key for gateway requests (`X-API-Key` / `Authorization: Bearer`) |
 | `tldr_llm_model` | no | empty | Optional bootstrap model; admin config is the source of truth |
-| `tldr_max_content_chars` | no | `40000` | Max characters of extracted web content sent to LLM |
+| `tldr_max_content_chars` | no | `40000` | Max combined characters of source and research evidence sent to LLM |
+| `tldr_search_model` | no | empty | Optional model override for native Responses web search. The selected TLDR model is used when empty |
+| `tldr_search_timeout_seconds` | no | `90` | Timeout for the native Responses web search request |
 | `tldr_rate_limit_per_day` | no | `20` | Per-user daily /tldr cap (fresh API hits only; 0 disables) |
 | `proxy_url` (env) | no | - | Optional SOCKS5/HTTP proxy for YouTube transcript requests and HTML/markdown-provider fallbacks (`github.com`, `raw.githubusercontent.com`, `r.jina.ai`) when the host cannot reach them directly. The GitHub API path (`api.github.com`) does not use it. |
 

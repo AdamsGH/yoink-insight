@@ -731,9 +731,9 @@ export default function InsightSettingsPage() {
             <CardContent className="px-4 pb-3">
               <div className="flex items-center justify-between gap-3 py-1">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm leading-snug">{t('insight.search_toggle_label', { defaultValue: 'Use web search engine' })}</p>
+                  <p className="text-sm leading-snug">{t('insight.search_toggle_label', { defaultValue: 'Fact-check with web search' })}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground leading-snug">
-                    {t('insight.search_toggle_hint', { defaultValue: 'Route /tldr, /summary and /about through the gateway answer engine. Better at scraping GitHub, Reddit, StackOverflow; can also resolve non-URL queries via web search.' })}
+                    {t('insight.search_toggle_hint', { defaultValue: 'Run a cited native web search before gateway-routed /tldr analysis. The source and independent evidence stay separate.' })}
                   </p>
                 </div>
                 <Switch

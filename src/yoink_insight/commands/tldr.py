@@ -3,27 +3,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any, Protocol
 
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from telegram import Message, MessageEntity, Update
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
-
+from yoink.core.auth.effective_features import EffectiveFeatureResolver
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-from sqlalchemy import select
 
-from yoink_insight.bot.middleware import get_effective_insight_config, get_insight_settings_repo, get_insight_usage_repo
+from yoink_insight.bot.middleware import (
+    get_effective_insight_config,
+    get_insight_settings_repo,
+    get_insight_usage_repo,
+)
 from yoink_insight.services.md_entities import _utf16_len, md_to_entities
 from yoink_insight.services.tldr import (
+    _BUILTIN_ALIASES,
+    ByokRoute,
     TldrError,
     UserAliasEntry,
-    _BUILTIN_ALIASES,
     alias_header_key,
     cache_key_for_url,
     match_domain,
     parse_aliases,
     parse_domains,
+    parse_tldr_request,
     prepare_tldr,
     resolve_tldr_route,
     stream_llm,
@@ -38,6 +46,16 @@ _TG_HARD_LIMIT_U16 = 4096
 _TG_DRAFT_LIMIT_U16 = 3800
 
 logger = logging.getLogger(__name__)
+
+
+class _SearchContext(Protocol):
+    @property
+    def bot_data(self) -> dict[str, Any]: ...
+
+
+class _SearchSettings(Protocol):
+    async def get_use_search(self, user_id: int) -> bool: ...
+
 
 # Send a draft update each time the buffered output grows by at least this many
 # characters since the last push.
@@ -137,6 +155,21 @@ def _find_cut_index(s: str, budget_u16: int) -> int:
     return max_idx
 
 
+async def _should_use_search(
+    context: _SearchContext,
+    settings: _SearchSettings,
+    user_id: int,
+    byok_route: ByokRoute | None,
+) -> bool:
+    if byok_route is not None or not await settings.get_use_search(user_id):
+        return False
+    session_factory = context.bot_data.get("session_factory")
+    if session_factory is None:
+        return False
+    resolver = EffectiveFeatureResolver(session_factory, context.bot_data)
+    return await resolver.is_allowed(user_id, "insight", "search")
+
+
 async def _load_user_alias_entries(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> list[UserAliasEntry]:
     """Load this user's alias rows into the canonical UserAliasEntry view."""
     session_factory = context.bot_data.get("session_factory")
@@ -181,12 +214,6 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_html(t("tldr.no_url", lang))
         return
 
-    url = args[0]
-    if not url.startswith("http://") and not url.startswith("https://"):
-        url = "https://" + url
-
-    question = " ".join(args[1:]).strip() or None
-
     usage_repo = get_insight_usage_repo(context)
     if config.tldr_rate_limit_per_day > 0:
         used_today = await usage_repo.count_today_command(user_id, "tldr")
@@ -204,18 +231,14 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     route = "byok" if byok_route is not None else "gateway"
 
     entries = await _load_user_alias_entries(context, user_id)
-
-    # Resolve alias_key: explicit question matching a known keyword, or
-    # a domain binding when the user passed no question.
-    alias_key: str | None = None
-    user_keys: set[str] = set()
-    for e in entries:
-        user_keys.update(e.keys)
-    if question is not None:
-        candidate = question.strip().lower()
-        if candidate in _BUILTIN_ALIASES or candidate in user_keys:
-            alias_key = candidate
-    elif question is None:
+    known_aliases = set(_BUILTIN_ALIASES)
+    for entry in entries:
+        known_aliases.update(entry.keys)
+    request = parse_tldr_request(args, known_aliases)
+    url = request.url
+    alias_key = request.alias_key
+    question = request.question
+    if alias_key is None and question is None:
         match = match_domain(url, entries)
         if match is not None:
             alias_key = match.effective_alias
@@ -225,9 +248,9 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cache_repo = context.bot_data.get("insight_summary_cache")
     ck = cache_key_for_url(url)
     cache_cmd = f"tldr:{alias_key}" if alias_key else "tldr"
-    cache_eligible = (question is None) or (alias_key is not None)
+    cache_eligible = question is None
     if cache_eligible:
-        cache_cmd += ":v2"
+        cache_cmd += ":v3"
     cached = await cache_repo.get(ck, lang, cache_cmd) if (cache_repo and cache_eligible) else None
     header = t(alias_header_key(alias_key), lang)
     header_len_u16 = _utf16_len(header)
@@ -313,7 +336,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         err_text = t(f"tldr.error.{code}", lang, fallback=t("insight.error.generic", lang))
         try:
             await update.message.reply_html(err_text)
-        except Exception as exc:
+        except TelegramError as exc:
             logger.debug("Failed to deliver error reply: %s", exc)
         await usage_repo.log(
             user_id, "tldr", lang=lang, status="error", error_code=code,
@@ -323,9 +346,20 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             route=route,
         )
 
-    # Fetch content + metrics first so they're available even if streaming fails.
+    use_search = (
+        config.ai_route_mode != "openrouter"
+        and await _should_use_search(context, settings, user_id, byok_route)
+    )
+
     try:
-        prepared = await prepare_tldr(url, config, github_token=user_github_token)
+        prepared = await prepare_tldr(
+            url,
+            config,
+            github_token=user_github_token,
+            use_search=use_search,
+            question=question,
+            research_model=config.tldr_search_model or user_model or config.tldr_llm_model,
+        )
     except TldrError as exc:
         code = exc.args[0] if exc.args else "generic"
         await _report_error(code)
@@ -340,9 +374,10 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         llm_desc = f"{config.ai_route_mode}:{user_model or config.tldr_llm_model}"
     logger.info(
-        "tldr user=%s url=%s via=%s %s content_chars=%d video_seconds=%s alias=%s question=%s",
-        user_id, url, prepared.via, llm_desc, len(prepared.content),
-        prepared.video_seconds, alias_key, bool(question),
+        "tldr user=%s url=%s via=%s research_via=%s %s content_chars=%d "
+        "research_chars=%d video_seconds=%s alias=%s question=%s",
+        user_id, url, prepared.via, prepared.research_via, llm_desc, len(prepared.content),
+        len(prepared.research or ""), prepared.video_seconds, alias_key, bool(question),
     )
 
     accumulated = ""
@@ -353,7 +388,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         async for chunk in stream_llm(
             prepared, lang, config,
             alias_key=alias_key,
-            question=question if alias_key is None else None,
+            question=question,
             model=user_model,
             entries=entries,
             byok=byok_route,
@@ -395,7 +430,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     draft_active = True
                     last_sent_len = len(accumulated)
                     last_sent_at = now
-                except Exception as draft_err:
+                except TelegramError as draft_err:
                     logger.debug("sendMessageDraft failed (non-fatal): %s", draft_err)
 
     except TldrError as exc:
@@ -424,7 +459,7 @@ async def _cmd_tldr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cache_repo and cache_eligible:
         try:
             await cache_repo.set(ck, lang, cache_cmd, body)
-        except Exception as cache_err:
+        except SQLAlchemyError as cache_err:
             logger.debug("Failed to cache tldr result: %s", cache_err)
 
     await usage_repo.log(
