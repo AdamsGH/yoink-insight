@@ -11,12 +11,12 @@ import asyncio
 import fnmatch
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from youtube_transcript_api import NoTranscriptFound, TranscriptsDisabled, YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
 
-from yoink_insight.config import InsightConfig
 from yoink_insight.services.byok import BYOKError, resolve_base_url
 from yoink_insight.services.byok import stream_chat as byok_stream_chat
 from yoink_insight.services.fetch import FetchResult, _FetchError, fetch_web_content
@@ -25,6 +25,9 @@ from yoink_insight.services.search_client import (
     join_sources_for_llm,
     search_fetch,
 )
+
+if TYPE_CHECKING:
+    from yoink_insight.config import InsightConfig
 
 logger = logging.getLogger(__name__)
 

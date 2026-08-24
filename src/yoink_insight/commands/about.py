@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING
 
-from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from yoink.core.bot.access import AccessPolicy, require_access
@@ -18,7 +18,11 @@ from yoink_insight.bot.middleware import (
 )
 from yoink_insight.commands._runner import run_insight_command
 from yoink_insight.services.gemini import GeminiSummarizer, InsightError
-from yoink_insight.storage.repos import InsightSummaryCacheRepo
+
+if TYPE_CHECKING:
+    from telegram import Update
+
+    from yoink_insight.storage.repos import InsightSummaryCacheRepo
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,7 @@ def _extract_youtube_url(text: str) -> str | None:
 
 
 def _is_youtube_url(url: str) -> bool:
-    host = url.split("/")[2].lstrip("www.") if "://" in url else ""
+    host = url.split("/")[2].removeprefix("www.") if "://" in url else ""
     return "youtube.com" in host or "youtu.be" in host
 
 

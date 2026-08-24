@@ -1,10 +1,14 @@
 """Activity provider for the insight plugin."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from yoink.core.activity import PluginActivity
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def insight_activity_provider(session: AsyncSession, user_id: int) -> PluginActivity:

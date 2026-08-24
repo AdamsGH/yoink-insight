@@ -25,6 +25,8 @@ from yoink_insight.config import InsightConfig
 from yoink_insight.services.byok import (
     BYOKError,
     resolve_base_url,
+)
+from yoink_insight.services.byok import (
     stream_chat as byok_stream_chat,
 )
 
@@ -60,7 +62,7 @@ class _Route:
 
 
 async def resolve_route(
-    session_factory: "async_sessionmaker",
+    session_factory: async_sessionmaker,
     user_id: int,
     *,
     prefer_byok: bool = True,
@@ -94,7 +96,7 @@ async def resolve_route(
 
 
 async def complete(
-    session_factory: "async_sessionmaker",
+    session_factory: async_sessionmaker,
     user_id: int,
     prompt: str,
     *,

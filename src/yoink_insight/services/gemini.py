@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from google import genai
@@ -13,7 +14,8 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi,
 )
 
-from yoink_insight.config import InsightConfig
+if TYPE_CHECKING:
+    from yoink_insight.config import InsightConfig
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +104,10 @@ def _fetch_transcript(video_id: str, lang_csv: str) -> str:
             )
         fetched = transcript.fetch()
         return " ".join(snip.text for snip in fetched)
-    except TranscriptsDisabled:
-        raise InsightError("transcripts_disabled")
-    except NoTranscriptFound:
-        raise InsightError("no_transcript")
+    except TranscriptsDisabled as exc:
+        raise InsightError("transcripts_disabled") from exc
+    except NoTranscriptFound as exc:
+        raise InsightError("no_transcript") from exc
     except Exception as exc:
         logger.warning("Transcript fetch failed for %s: %s", video_id, exc)
         raise InsightError("transcript_error") from exc
@@ -131,7 +133,7 @@ class GeminiSummarizer:
                 ),
                 timeout=30.0,
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             logger.error("Gemini API timeout")
             raise InsightError("api_error") from exc
         except Exception as exc:

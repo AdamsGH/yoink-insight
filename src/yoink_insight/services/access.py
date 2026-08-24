@@ -9,14 +9,18 @@ in sync until those callers move off it.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import User, UserPermission
 from yoink_insight.storage.models import InsightAccess
-from yoink_insight.storage.repos import InsightAccessRepo
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from yoink_insight.storage.repos import InsightAccessRepo
 
 _PLUGIN = "insight"
 _FEATURE = "summary"
@@ -45,7 +49,7 @@ class InsightAccessService:
         if user_id == self._owner_id:
             return True
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             perm = await s.execute(
                 select(UserPermission.id).where(
@@ -65,7 +69,7 @@ class InsightAccessService:
         lang: str = "en",
     ) -> UserPermission:
         """Grant insight/summary in user_permissions."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             user = await s.get(User, user_id)
             if user is None:

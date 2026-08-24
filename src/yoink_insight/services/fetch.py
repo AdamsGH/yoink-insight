@@ -359,7 +359,7 @@ async def _check_llms_txt(url: str, client: httpx.AsyncClient) -> str | None:
         for m in link_re.finditer(r.text):
             link_url = m.group(2)
             try:
-                link_path = urlparse(link_url).path.rstrip("/").rstrip("/index.md").rstrip(".md")
+                link_path = urlparse(link_url).path.rstrip("/").removesuffix("/index.md").removesuffix(".md")
                 if link_path == requested_path:
                     return link_url
             except Exception:

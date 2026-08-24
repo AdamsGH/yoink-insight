@@ -10,11 +10,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from telegram import Message, MessageEntity, Update
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
+
 from yoink.core.auth.effective_features import EffectiveFeatureResolver
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
-
 from yoink_insight.bot.middleware import (
     get_effective_insight_config,
     get_insight_settings_repo,

@@ -5,11 +5,12 @@ import json
 import logging
 from dataclasses import dataclass
 from json import JSONDecodeError
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from yoink_insight.config import InsightConfig
+if TYPE_CHECKING:
+    from yoink_insight.config import InsightConfig
 
 logger = logging.getLogger(__name__)
 

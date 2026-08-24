@@ -1,11 +1,12 @@
 """Insight plugin repositories."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
-from sqlalchemy import case as sa_case, delete, func, select
+from sqlalchemy import case as sa_case
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yoink.core.db.models import User
 from yoink_insight.storage.models import (
@@ -16,6 +17,9 @@ from yoink_insight.storage.models import (
     InsightUserPrompt,
     InsightUserSettings,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
 _CACHE_TTL_HOURS = 24
 
@@ -32,7 +36,7 @@ class InsightSummaryCacheRepo:
 
     async def get(self, content_key: str, lang: str, command: str) -> str | None:
         """Return cached result if it exists and has not expired."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             result = await s.execute(
                 select(InsightSummaryCache.result)
@@ -48,7 +52,7 @@ class InsightSummaryCacheRepo:
 
     async def set(self, content_key: str, lang: str, command: str, result: str) -> None:
         """Upsert a cached result with a fresh TTL."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(hours=_CACHE_TTL_HOURS)
         async with self._sf() as s:
             stmt = (
@@ -71,7 +75,7 @@ class InsightSummaryCacheRepo:
 
     async def evict_expired(self) -> int:
         """Delete all expired cache entries. Called by cleanup job."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self._sf() as s:
             result = await s.execute(
                 delete(InsightSummaryCache).where(InsightSummaryCache.expires_at <= now)
@@ -226,7 +230,7 @@ class InsightUserByokRepo:
                 user = User(id=user_id)
                 s.add(user)
                 await s.flush()
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             row = await s.get(InsightUserByok, user_id)
             if row is None:
                 row = InsightUserByok(
@@ -269,7 +273,7 @@ class InsightUserByokRepo:
             row = await s.get(InsightUserByok, user_id)
             if row is None:
                 return None
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             row.models_json = models_json
             row.models_fetched_at = now
             row.tested_at = tested_at
@@ -350,7 +354,7 @@ class InsightUserPromptRepo:
                 s.add(row)
             else:
                 row.prompt = prompt.strip()
-                row.updated_at = datetime.now(timezone.utc)
+                row.updated_at = datetime.now(UTC)
             await s.commit()
 
 
@@ -384,13 +388,13 @@ class InsightAccessRepo:
                     user_id=user_id,
                     granted_by=granted_by,
                     lang=lang,
-                    granted_at=datetime.now(timezone.utc),
+                    granted_at=datetime.now(UTC),
                 )
                 s.add(row)
             else:
                 row.granted_by = granted_by
                 row.lang = lang
-                row.granted_at = datetime.now(timezone.utc)
+                row.granted_at = datetime.now(UTC)
             await s.commit()
             await s.refresh(row)
             return row
@@ -473,7 +477,7 @@ class InsightUsageLogRepo:
 
         'cached' rows are not counted - only status='ok'.
         """
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         async with self._sf() as s:
             result = await s.execute(
                 select(func.count()).select_from(InsightUsageLog).where(
@@ -486,7 +490,7 @@ class InsightUsageLogRepo:
 
     async def count_today_command(self, user_id: int, command: str) -> int:
         """Count successful calls for a specific command today (status='ok' only)."""
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         async with self._sf() as s:
             result = await s.execute(
                 select(func.count()).select_from(InsightUsageLog).where(
@@ -500,7 +504,7 @@ class InsightUsageLogRepo:
 
     async def stats_for_user(self, user_id: int) -> dict:
         """Return aggregate stats for a single user."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - __import__("datetime").timedelta(days=today_start.weekday())
 
@@ -526,7 +530,7 @@ class InsightUsageLogRepo:
             by_command = {row[0]: row[1] for row in cmd_rows}
 
             # Daily history (last 30 days)
-            from sqlalchemy import cast, Date
+            from sqlalchemy import Date, cast
             thirty_days_ago = now - __import__("datetime").timedelta(days=30)
             day_rows = (await s.execute(
                 select(
@@ -568,9 +572,10 @@ class InsightUsageLogRepo:
         Only status IN ('ok', 'cached') is counted (errors don't "save time").
         """
         from datetime import timedelta
+
         from sqlalchemy import Date, cast, or_
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=today_start.weekday())
         thirty_days_ago = now - timedelta(days=30)

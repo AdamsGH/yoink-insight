@@ -1,17 +1,20 @@
 """Insight plugin middleware helpers."""
 from __future__ import annotations
 
-from telegram.ext import ContextTypes
+from typing import TYPE_CHECKING
 
-from yoink_insight.config import InsightConfig
-from yoink_insight.services.access import InsightAccessService
-from yoink_insight.storage.repos import (
-    InsightAccessRepo,
-    InsightUsageLogRepo,
-    InsightUserByokRepo,
-    InsightUserPromptRepo,
-    InsightUserSettingsRepo,
-)
+if TYPE_CHECKING:
+    from telegram.ext import ContextTypes
+
+    from yoink_insight.config import InsightConfig
+    from yoink_insight.services.access import InsightAccessService
+    from yoink_insight.storage.repos import (
+        InsightAccessRepo,
+        InsightUsageLogRepo,
+        InsightUserByokRepo,
+        InsightUserPromptRepo,
+        InsightUserSettingsRepo,
+    )
 
 
 def get_insight_config(context: ContextTypes.DEFAULT_TYPE) -> InsightConfig:

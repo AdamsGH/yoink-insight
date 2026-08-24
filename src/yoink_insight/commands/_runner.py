@@ -9,14 +9,18 @@ once, not twice.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-
-from telegram import Message, Update
-from telegram.ext import ContextTypes
+from typing import TYPE_CHECKING
 
 from yoink.core.i18n.loader import t
 from yoink_insight.services.gemini import GeminiSummarizer, InsightError, _extract_video_id
-from yoink_insight.storage.repos import InsightSummaryCacheRepo, InsightUsageLogRepo
+
+if TYPE_CHECKING:
+    from telegram import Message, Update
+    from telegram.ext import ContextTypes
+
+    from yoink_insight.storage.repos import InsightSummaryCacheRepo, InsightUsageLogRepo
 
 logger = logging.getLogger(__name__)
 
@@ -108,15 +112,11 @@ async def run_insight_command(
     async def _cleanup_thinking() -> None:
         if not thinking_task.done():
             thinking_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await thinking_task
-            except (asyncio.CancelledError, Exception):
-                pass
         if thinking_msg is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await thinking_msg.delete()
-            except Exception:
-                pass
 
     accumulated = ""
     last_sent_len = 0

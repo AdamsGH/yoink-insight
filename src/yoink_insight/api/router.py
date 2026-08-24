@@ -5,7 +5,7 @@ Mounted at /api/v1/insight/ by the core API factory.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -96,7 +96,7 @@ async def _get_or_create_owner_row(
             user_id=user.id,
             lang=config.insight_default_lang,
             granted_by=user.id,
-            granted_at=datetime.now(timezone.utc),
+            granted_at=datetime.now(UTC),
         )
         session.add(row)
         await session.commit()
@@ -154,13 +154,13 @@ async def grant_insight_access(
             user_id=uid,
             lang=body.lang,
             granted_by=current_user.id,
-            granted_at=datetime.now(timezone.utc),
+            granted_at=datetime.now(UTC),
         )
         session.add(row)
     else:
         row.lang = body.lang
         row.granted_by = current_user.id
-        row.granted_at = datetime.now(timezone.utc)
+        row.granted_at = datetime.now(UTC)
 
     await session.commit()
     await session.refresh(row)
@@ -254,9 +254,10 @@ async def get_my_insight_stats(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     from datetime import timedelta
-    from sqlalchemy import cast, Date, func, or_
 
-    now = datetime.now(timezone.utc)
+    from sqlalchemy import Date, cast, func, or_
+
+    now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
     thirty_days_ago = now - timedelta(days=30)
@@ -600,7 +601,7 @@ async def update_my_insight_settings(
                 ))
             else:
                 existing.prompt = prompt.strip()
-                existing.updated_at = datetime.now(timezone.utc)
+                existing.updated_at = datetime.now(UTC)
 
     await session.commit()
     await session.refresh(settings_row)
@@ -661,6 +662,7 @@ async def _refresh_user_bot_commands(request: Request, session: AsyncSession, us
 async def _get_tldr_allowed_models_from_db(session: AsyncSession, config: InsightConfig) -> list[str]:
     """Load allowed_models from bot_settings, fall back to [default_model]."""
     import json
+
     from yoink.core.db.models import BotSetting
     row = await session.get(BotSetting, _TLDR_ALLOWED_KEY)
     if row and row.value:
@@ -711,6 +713,7 @@ async def update_tldr_config(
     _: User = Depends(require_role(UserRole.admin, UserRole.owner)),
 ) -> TldrConfigResponse:
     import json
+
     from yoink.core.db.models import BotSetting
     if not body.allowed_models:
         raise HTTPException(status_code=400, detail="allowed_models must not be empty.")
@@ -1094,10 +1097,12 @@ async def put_my_byok(
     current_user: User = Depends(get_current_user),
 ) -> ByokConfigResponse:
     from yoink_insight.services.byok import (
-        BYOKError,
         PROVIDERS,
-        probe as byok_probe,
+        BYOKError,
         resolve_base_url,
+    )
+    from yoink_insight.services.byok import (
+        probe as byok_probe,
     )
     enabled = await _get_byok_enabled(session)
     if not enabled and not _is_owner(current_user):
@@ -1121,7 +1126,7 @@ async def put_my_byok(
         raise HTTPException(
             status_code=400,
             detail=f"Invalid base_url: {exc.args[0] if exc.args else 'bad_base_url'}",
-        )
+        ) from exc
 
     # Probe + populate the model cache so the user gets feedback in one call.
     result = await byok_probe(body.provider, base_url, api_key)
@@ -1134,11 +1139,11 @@ async def put_my_byok(
             {"id": m.id, "supports_websearch": m.supports_websearch}
             for m in result.models
         ])
-        tested_at = datetime.now(timezone.utc)
+        tested_at = datetime.now(UTC)
     else:
         test_error = result.error or "probe_failed"
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if existing is None:
         existing = InsightUserByok(
             user_id=current_user.id,
@@ -1207,7 +1212,8 @@ async def test_my_byok(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ByokTestResponse:
-    from yoink_insight.services.byok import PROVIDERS, probe as byok_probe
+    from yoink_insight.services.byok import PROVIDERS
+    from yoink_insight.services.byok import probe as byok_probe
     enabled = await _get_byok_enabled(session)
     if not enabled and not _is_owner(current_user):
         raise HTTPException(status_code=403, detail="BYOK is disabled by the administrator.")
@@ -1247,7 +1253,7 @@ async def refresh_my_byok_models(
 
     result = await byok_probe(row.provider, row.base_url, row.api_key)
     import json
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if result.ok:
         row.models_json = json.dumps([
             {"id": m.id, "supports_websearch": m.supports_websearch}
@@ -1360,7 +1366,7 @@ async def start_github_login(
         raise HTTPException(
             status_code=502,
             detail=f"GitHub device-code request failed: {exc!r}",
-        )
+        ) from exc
     return {
         "user_code": state.user_code,
         "verification_uri": state.verification_uri,
@@ -1425,8 +1431,8 @@ async def start_public_repo_login(
     never overwrites the base read:user token. Returns the same shape as
     /github/login so the frontend can reuse the same polling component.
     """
-    from yoink_insight.services import github_device
     from yoink_insight.config import InsightConfig
+    from yoink_insight.services import github_device
 
     cfg = InsightConfig()
     if not cfg.github_oauth_public_repo_client_id:
@@ -1434,6 +1440,7 @@ async def start_public_repo_login(
 
     import asyncio as _asyncio
     import logging as _logging
+
     import httpx as _httpx
 
     sf = request.app.state.session_factory
@@ -1452,7 +1459,10 @@ async def start_public_repo_login(
             await _asyncio.sleep(1.5 * (attempt + 1))
         except Exception as exc:
             _logging.getLogger(__name__).exception("upgrade-scope failed for user=%d", current_user.id)
-            raise HTTPException(status_code=502, detail=f"GitHub device-code request failed: {exc!r}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"GitHub device-code request failed: {exc!r}",
+            ) from exc
     else:
         raise HTTPException(status_code=502, detail=f"GitHub unreachable after 3 attempts: {last_exc!r}")
     return {
@@ -1502,8 +1512,8 @@ async def get_write_token_status(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    from yoink_insight.storage.repos import InsightUserSettingsRepo
     from yoink_insight.config import InsightConfig
+    from yoink_insight.storage.repos import InsightUserSettingsRepo
 
     sf = request.app.state.session_factory
     token = await InsightUserSettingsRepo(sf).get_github_token_public_repo(current_user.id)

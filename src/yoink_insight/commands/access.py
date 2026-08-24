@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from yoink.core.bot.access import AccessPolicy, require_access
 from yoink.core.db.models import UserRole
 from yoink.core.i18n.loader import t
 from yoink_insight.bot.middleware import get_insight_access, get_insight_config
+
+if TYPE_CHECKING:
+    from telegram import Update
 
 logger = logging.getLogger(__name__)
 

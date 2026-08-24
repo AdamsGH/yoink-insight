@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-
-from fastapi import APIRouter
+from typing import TYPE_CHECKING
 
 from yoink.core.plugin import (
     FeatureSpec,
@@ -15,6 +14,9 @@ from yoink.core.plugin import (
     WebPage,
 )
 from yoink_insight.config import InsightConfig
+
+if TYPE_CHECKING:
+    from fastapi import APIRouter
 
 
 class InsightPlugin:
@@ -87,6 +89,7 @@ class InsightPlugin:
 
     def get_commands(self) -> list:
         import yaml
+
         from yoink.core.plugin import CommandSpec
 
         locales_dir = Path(__file__).parent / "i18n" / "locales"
@@ -121,9 +124,9 @@ class InsightPlugin:
 
     def get_help_section(self, role: str, lang: str, granted_features: set[str] | None = None) -> str:
         import yaml
-        from yoink.core.plugin import CommandSpec
 
         from yoink.core.auth.rbac import ROLE_RANK as _ROLE_RANK  # noqa: PLC0415
+        from yoink.core.plugin import CommandSpec
         rank = _ROLE_RANK.get(role, 0)
 
         locales_dir = Path(__file__).parent / "i18n" / "locales"

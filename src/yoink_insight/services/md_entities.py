@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING
 
 from markdown_it import MarkdownIt
-from markdown_it.token import Token
+
+if TYPE_CHECKING:
+    from markdown_it.token import Token
 
 logging.getLogger("markdown_it").setLevel(logging.WARNING)
 

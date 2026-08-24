@@ -23,7 +23,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 import httpx
 
@@ -63,8 +62,8 @@ class DeviceFlowState:
     expires_at: float          # unix seconds
     interval: int              # poll interval, seconds
     status: str = "pending"    # pending | success | expired | error
-    error: Optional[str] = None
-    username: Optional[str] = None
+    error: str | None = None
+    username: str | None = None
     started_at: float = field(default_factory=time.time)
 
 
@@ -101,7 +100,7 @@ async def start_device_flow(user_id: int, session_factory) -> DeviceFlowState:
     return state
 
 
-async def get_device_flow_status(user_id: int) -> Optional[DeviceFlowState]:
+async def get_device_flow_status(user_id: int) -> DeviceFlowState | None:
     return _pending.get(user_id)
 
 
@@ -170,7 +169,7 @@ async def _poll_until_done(state: DeviceFlowState, session_factory) -> None:
             return
 
         # Look up the username so the UI can show 'Signed in as @x'.
-        username: Optional[str] = None
+        username: str | None = None
         try:
             async with _make_client(timeout=10) as client:
                 ur = await client.get(
@@ -240,7 +239,7 @@ async def start_public_repo_flow(
     return state
 
 
-async def get_public_repo_flow_status(user_id: int) -> Optional[DeviceFlowState]:
+async def get_public_repo_flow_status(user_id: int) -> DeviceFlowState | None:
     return _pending_public_repo.get(user_id)
 
 
@@ -307,7 +306,7 @@ async def _poll_public_repo(
             state.error = "GitHub returned no access_token and no error."
             return
 
-        username: Optional[str] = None
+        username: str | None = None
         try:
             async with _make_client(timeout=10) as client:
                 ur = await client.get(

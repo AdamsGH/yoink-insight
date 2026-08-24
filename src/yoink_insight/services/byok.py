@@ -26,9 +26,12 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
