@@ -7,6 +7,7 @@ import {
   type ByokConfig,
   type ByokModelInfo,
   type ByokProviderInfo,
+  type InsightSettings,
 } from '@insight/api/insight'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -28,9 +29,10 @@ const KEY_CLEAR = '__clear__'
 interface Props {
   data: ByokConfig
   onChange: (next: ByokConfig) => void
+  onAccessChange: (next: InsightSettings) => void
 }
 
-export default function ByokCard({ data, onChange }: Props) {
+export default function ByokCard({ data, onChange, onAccessChange }: Props) {
   const { t } = useTranslation()
 
   const [provider, setProvider] = useState<string>(data.provider ?? '')
@@ -42,6 +44,10 @@ export default function ByokCard({ data, onChange }: Props) {
   const [testing, setTesting] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [models, setModels] = useState<ByokModelInfo[]>(data.models)
+  const [probeError, setProbeError] = useState<string | null>(data.test_error)
+  const [probeOk, setProbeOk] = useState(!!data.tested_at && !data.test_error)
+  const [probeInputs, setProbeInputs] = useState({ provider: data.provider ?? '', baseUrl: data.base_url ?? '', apiKey: KEY_KEEP })
+  const probeMatchesDraft = probeInputs.provider === provider && probeInputs.baseUrl === baseUrl && probeInputs.apiKey === apiKey
   const [warnModelId, setWarnModelId] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -52,6 +58,9 @@ export default function ByokCard({ data, onChange }: Props) {
     setApiKey(KEY_KEEP)
     setModel(data.model ?? '')
     setModels(data.models)
+    setProbeError(data.test_error)
+    setProbeOk(!!data.tested_at && !data.test_error)
+    setProbeInputs({ provider: data.provider ?? '', baseUrl: data.base_url ?? '', apiKey: KEY_KEEP })
   }, [data])
 
   const providers = data.providers
@@ -86,7 +95,10 @@ export default function ByokCard({ data, onChange }: Props) {
         base_url: baseUrl.trim() || null,
         api_key: apiKey === KEY_KEEP ? null : apiKey,
       })
+      setProbeInputs({ provider, baseUrl, apiKey })
       if (res.data.ok) {
+        setProbeError(null)
+        setProbeOk(true)
         setModels(res.data.models)
         toast.success(t('insight.byok.test_ok', {
           defaultValue: '{{count}} models available',
@@ -98,11 +110,15 @@ export default function ByokCard({ data, onChange }: Props) {
           setModel((ws ?? res.data.models[0]).id)
         }
       } else {
+        setProbeOk(false)
+        setProbeError(res.data.error)
         toast.error(t(`insight.byok.test_err.${res.data.error}`, {
           defaultValue: res.data.error ?? 'Probe failed',
         }))
       }
     } catch {
+      setProbeOk(false)
+      setProbeError('network_error')
       toast.error(t('common.load_error'))
     } finally {
       setTesting(false)
@@ -120,6 +136,9 @@ export default function ByokCard({ data, onChange }: Props) {
       })
       setApiKey(KEY_KEEP)
       onChange(res.data)
+      setProbeError(res.data.test_error)
+      setProbeOk(!res.data.test_error && !!res.data.tested_at)
+      void insightApi.getSettings().then((settings) => onAccessChange(settings.data)).catch(() => toast.error(t('common.load_error')))
       if (res.data.test_error) {
         toast.error(t(`insight.byok.test_err.${res.data.test_error}`, {
           defaultValue: res.data.test_error,
@@ -160,18 +179,25 @@ export default function ByokCard({ data, onChange }: Props) {
         base_url: baseUrl.trim() || null,
         api_key: apiKey === KEY_KEEP ? null : apiKey,
       })
+      setProbeInputs({ provider, baseUrl, apiKey })
       if (!res.data.ok) {
+        setProbeOk(false)
+        setProbeError(res.data.error)
         toast.error(t(`insight.byok.test_err.${res.data.error}`, {
           defaultValue: res.data.error ?? 'Probe failed',
         }))
         return
       }
+      setProbeError(null)
+      setProbeOk(true)
       setModels(res.data.models)
       toast.success(t('insight.byok.test_ok', {
         defaultValue: '{{count}} models available',
         count: res.data.models.length,
       }))
     } catch {
+      setProbeOk(false)
+      setProbeError('network_error')
       toast.error(t('common.load_error'))
     } finally {
       setRefreshing(false)
@@ -184,6 +210,9 @@ export default function ByokCard({ data, onChange }: Props) {
       await insightApi.deleteByok()
       const res = await insightApi.getByok()
       onChange(res.data)
+      void insightApi.getSettings().then((settings) => onAccessChange(settings.data)).catch(() => toast.error(t('common.load_error')))
+      setProbeError(null)
+      setProbeOk(false)
       setProvider('')
       setBaseUrl('')
       setApiKey(KEY_KEEP)
@@ -328,16 +357,20 @@ export default function ByokCard({ data, onChange }: Props) {
                 <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
               </Button>
             )}
-            {data.tested_at && !data.test_error && (
+            {probeMatchesDraft && probeOk && (
               <span className="text-xs text-green-600 dark:text-green-400 inline-flex items-center gap-1">
                 <Check className="h-3 w-3" />
                 {t('insight.byok.tested_ok', { defaultValue: 'verified' })}
               </span>
             )}
-            {data.test_error && (
+            {probeMatchesDraft && probeError && (
               <span className="text-xs text-destructive inline-flex items-center gap-1">
                 <AlertTriangle className="h-3 w-3" />
-                {data.test_error}
+                {t(`insight.byok.test_err.${probeError}`, {
+                  defaultValue: probeError === 'http_403'
+                    ? t('insight.byok.test_err.provider_forbidden', { defaultValue: 'Provider denied the request. Check key permissions or account restrictions.' })
+                    : probeError,
+                })}
               </span>
             )}
           </div>

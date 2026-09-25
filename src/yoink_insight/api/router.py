@@ -1096,6 +1096,7 @@ async def put_my_byok(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ByokConfigResponse:
+    from yoink_insight.config import InsightConfig
     from yoink_insight.services.byok import (
         PROVIDERS,
         BYOKError,
@@ -1129,7 +1130,10 @@ async def put_my_byok(
         ) from exc
 
     # Probe + populate the model cache so the user gets feedback in one call.
-    result = await byok_probe(body.provider, base_url, api_key)
+    result = await byok_probe(
+        body.provider, base_url, api_key,
+        proxy_url=InsightConfig().proxy_url if body.provider == "openrouter" else None,
+    )
     models_json: str | None = None
     tested_at: datetime | None = None
     test_error: str | None = None
@@ -1212,6 +1216,7 @@ async def test_my_byok(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ByokTestResponse:
+    from yoink_insight.config import InsightConfig
     from yoink_insight.services.byok import PROVIDERS
     from yoink_insight.services.byok import probe as byok_probe
     enabled = await _get_byok_enabled(session)
@@ -1229,7 +1234,10 @@ async def test_my_byok(
         api_key = existing.api_key
 
     base_url = (body.base_url or "").strip() or None
-    result = await byok_probe(body.provider, base_url, api_key)
+    result = await byok_probe(
+        body.provider, base_url, api_key,
+        proxy_url=InsightConfig().proxy_url if body.provider == "openrouter" else None,
+    )
     return ByokTestResponse(
         ok=result.ok,
         error=result.error,
@@ -1243,6 +1251,7 @@ async def refresh_my_byok_models(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ByokConfigResponse:
+    from yoink_insight.config import InsightConfig
     from yoink_insight.services.byok import probe as byok_probe
     enabled = await _get_byok_enabled(session)
     if not enabled and not _is_owner(current_user):
@@ -1251,7 +1260,10 @@ async def refresh_my_byok_models(
     if row is None:
         raise HTTPException(status_code=404, detail="No BYOK config saved.")
 
-    result = await byok_probe(row.provider, row.base_url, row.api_key)
+    result = await byok_probe(
+        row.provider, row.base_url, row.api_key,
+        proxy_url=InsightConfig().proxy_url if row.provider == "openrouter" else None,
+    )
     import json
     now = datetime.now(UTC)
     if result.ok:

@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from yoink_insight.config import InsightConfig
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
@@ -234,7 +236,9 @@ def _annotate_models(provider: str, ids: list[str]) -> list[ModelInfo]:
 # ---------------------------------------------------------------------------
 
 
-async def list_models(provider: str, base_url: str, api_key: str) -> list[ModelInfo]:
+async def list_models(
+    provider: str, base_url: str, api_key: str, *, proxy_url: str | None = None
+) -> list[ModelInfo]:
     """Fetch the provider model catalogue, falling back to the hardcoded list.
 
     Never raises - returns the fallback on any network or auth error so the
@@ -246,10 +250,15 @@ async def list_models(provider: str, base_url: str, api_key: str) -> list[ModelI
 
     if spec.supports_models_endpoint:
         try:
+            if provider == "openrouter":
+                await _verify_openrouter_key(
+                    base_url, api_key, proxy_url=proxy_url,
+                    timeout_seconds=InsightConfig().insight_byok_probe_timeout_seconds,
+                )
             if spec.api_shape == "openai":
-                ids = await _fetch_openai_models(base_url, api_key)
+                ids = await _fetch_openai_models(base_url, api_key, proxy_url=proxy_url)
             else:
-                ids = await _fetch_anthropic_models(base_url, api_key)
+                ids = await _fetch_anthropic_models(base_url, api_key, proxy_url=proxy_url)
             if ids:
                 return _annotate_models(provider, ids)
         except Exception as exc:
@@ -258,21 +267,41 @@ async def list_models(provider: str, base_url: str, api_key: str) -> list[ModelI
     return _annotate_models(provider, list(spec.fallback_models))
 
 
-async def _fetch_openai_models(base_url: str, api_key: str) -> list[str]:
+async def _fetch_openai_models(
+    base_url: str, api_key: str, *, proxy_url: str | None = None
+) -> list[str]:
     endpoint = base_url.rstrip("/") + "/models"
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, proxy=proxy_url or None) as client:
         resp = await client.get(endpoint, headers=_openai_headers(api_key))
     if resp.status_code != 200:
+        if resp.status_code == 401:
+            raise BYOKError("invalid_api_key")
+        if resp.status_code == 403:
+            raise BYOKError("provider_forbidden")
+        if resp.status_code == 429:
+            raise BYOKError("provider_rate_limited")
+        if resp.status_code >= 500:
+            raise BYOKError("provider_unavailable")
         raise BYOKError(f"http_{resp.status_code}")
     data = resp.json().get("data", [])
     return [m.get("id") for m in data if m.get("id")]
 
 
-async def _fetch_anthropic_models(base_url: str, api_key: str) -> list[str]:
+async def _fetch_anthropic_models(
+    base_url: str, api_key: str, *, proxy_url: str | None = None
+) -> list[str]:
     endpoint = base_url.rstrip("/") + "/v1/models"
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, proxy=proxy_url or None) as client:
         resp = await client.get(endpoint, headers=_anthropic_headers(api_key))
     if resp.status_code != 200:
+        if resp.status_code == 401:
+            raise BYOKError("invalid_api_key")
+        if resp.status_code == 403:
+            raise BYOKError("provider_forbidden")
+        if resp.status_code == 429:
+            raise BYOKError("provider_rate_limited")
+        if resp.status_code >= 500:
+            raise BYOKError("provider_unavailable")
         raise BYOKError(f"http_{resp.status_code}")
     data = resp.json().get("data", [])
     return [m.get("id") for m in data if m.get("id")]
@@ -283,7 +312,9 @@ async def _fetch_anthropic_models(base_url: str, api_key: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-async def probe(provider: str, base_url: str | None, api_key: str) -> ProbeResult:
+async def probe(
+    provider: str, base_url: str | None, api_key: str, *, proxy_url: str | None = None
+) -> ProbeResult:
     """Smoke-test the key+endpoint. Returns models on success."""
     if not api_key or not api_key.strip():
         return ProbeResult(ok=False, error="api_key_required")
@@ -294,20 +325,27 @@ async def probe(provider: str, base_url: str | None, api_key: str) -> ProbeResul
 
     spec = PROVIDERS[provider]
     try:
+        if provider == "openrouter":
+            await _verify_openrouter_key(
+                base, api_key, proxy_url=proxy_url,
+                timeout_seconds=InsightConfig().insight_byok_probe_timeout_seconds,
+            )
+            ids = await _fetch_openai_models(base, api_key, proxy_url=proxy_url)
+            return ProbeResult(ok=True, models=_annotate_models(provider, ids or list(spec.fallback_models)))
         if spec.supports_models_endpoint:
             if spec.api_shape == "openai":
-                ids = await _fetch_openai_models(base, api_key)
+                ids = await _fetch_openai_models(base, api_key, proxy_url=proxy_url)
             else:
-                ids = await _fetch_anthropic_models(base, api_key)
+                ids = await _fetch_anthropic_models(base, api_key, proxy_url=proxy_url)
             return ProbeResult(ok=True, models=_annotate_models(provider, ids or list(spec.fallback_models)))
 
         # Providers without /v1/models: run a tiny chat probe to verify auth.
-        await _ping_chat(spec, base, api_key)
+        await _ping_chat(spec, base, api_key, proxy_url=proxy_url)
         return ProbeResult(ok=True, models=_annotate_models(provider, list(spec.fallback_models)))
-    except httpx.ConnectError:
-        return ProbeResult(ok=False, error="connect_error")
     except httpx.TimeoutException:
         return ProbeResult(ok=False, error="timeout")
+    except httpx.RequestError:
+        return ProbeResult(ok=False, error="network_error")
     except BYOKError as exc:
         return ProbeResult(ok=False, error=exc.args[0] if exc.args else "probe_failed")
     except Exception as exc:
@@ -315,7 +353,28 @@ async def probe(provider: str, base_url: str | None, api_key: str) -> ProbeResul
         return ProbeResult(ok=False, error="probe_failed")
 
 
-async def _ping_chat(spec: ProviderSpec, base_url: str, api_key: str) -> None:
+async def _verify_openrouter_key(
+    base_url: str, api_key: str, *, proxy_url: str | None, timeout_seconds: float
+) -> None:
+    """Authenticate against OpenRouter's private key endpoint before its public catalogue."""
+    endpoint = base_url.rstrip("/") + "/key"
+    async with httpx.AsyncClient(timeout=timeout_seconds, proxy=proxy_url or None) as client:
+        response = await client.get(endpoint, headers=_openai_headers(api_key))
+    if response.status_code != 200:
+        if response.status_code == 401:
+            raise BYOKError("invalid_api_key")
+        if response.status_code == 403:
+            raise BYOKError("provider_forbidden")
+        if response.status_code == 429:
+            raise BYOKError("provider_rate_limited")
+        if response.status_code >= 500:
+            raise BYOKError("provider_unavailable")
+        raise BYOKError(f"http_{response.status_code}")
+
+
+async def _ping_chat(
+    spec: ProviderSpec, base_url: str, api_key: str, *, proxy_url: str | None = None
+) -> None:
     """Cheap auth probe for providers without /v1/models (perplexity)."""
     model = spec.fallback_models[0] if spec.fallback_models else ""
     if not model:
@@ -338,12 +397,16 @@ async def _ping_chat(spec: ProviderSpec, base_url: str, api_key: str) -> None:
         }
         headers = _anthropic_headers(api_key)
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, proxy=proxy_url or None) as client:
         resp = await client.post(endpoint, headers=headers, json=body)
-    if resp.status_code == 401 or resp.status_code == 403:
-        raise BYOKError("auth_failed")
+    if resp.status_code == 401:
+        raise BYOKError("invalid_api_key")
+    if resp.status_code == 403:
+        raise BYOKError("provider_forbidden")
+    if resp.status_code == 429:
+        raise BYOKError("provider_rate_limited")
     if resp.status_code >= 500:
-        raise BYOKError(f"http_{resp.status_code}")
+        raise BYOKError("provider_unavailable")
     # 400 with "max_tokens too low" or similar still proves auth works.
 
 
@@ -400,8 +463,10 @@ def _extract_provider_message(raw: bytes) -> str:
 
 def _classify_provider_status(status: int) -> str:
     """Map an upstream HTTP status onto a stable BYOKError code."""
-    if status in (401, 403):
-        return "auth_failed"
+    if status == 401:
+        return "invalid_api_key"
+    if status == 403:
+        return "provider_forbidden"
     if status == 402:
         return "insufficient_credits"
     if status == 429:

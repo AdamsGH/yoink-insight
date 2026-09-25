@@ -24,6 +24,8 @@ class InsightConfig(BaseSettings):
     insight_transcript_langs: str = "en,ru"
     # Shared HTTP/SOCKS proxy used for YouTube transcript requests.
     proxy_url: str = ""
+    # Timeout for OpenRouter BYOK key authentication.
+    insight_byok_probe_timeout_seconds: float = 10.0
 
     # Max successful Gemini calls per user per UTC day. 0 disables the gate.
     # Cached responses do not count against this limit; only fresh API hits do.
