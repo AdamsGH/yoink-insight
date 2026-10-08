@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Check, Globe, KeyRound, RefreshCw, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Check, Globe, KeyRound, RefreshCw, Trash2 } from 'lucide-react'
 
+import CredentialInput from '@insight/components/CredentialInput'
+import { credentialField, KEEP_CREDENTIAL, type CredentialEdit } from '@insight/api/credentials'
 import {
   insightApi,
   type ByokConfig,
@@ -19,13 +21,6 @@ import {
 } from '@ui'
 import { toast } from '@core/components/ui/toast'
 
-// Local-edit sentinel for the api_key field, matching the github_token pattern:
-//   ''          -> keep existing
-//   '__clear__' -> wipe on save (delete config entirely; mapped before send)
-//   anything    -> replace
-const KEY_KEEP = ''
-const KEY_CLEAR = '__clear__'
-
 interface Props {
   data: ByokConfig
   onChange: (next: ByokConfig) => void
@@ -37,7 +32,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
 
   const [provider, setProvider] = useState<string>(data.provider ?? '')
   const [baseUrl, setBaseUrl] = useState<string>(data.base_url ?? '')
-  const [apiKey, setApiKey] = useState<string>(KEY_KEEP)
+  const [apiKey, setApiKey] = useState<CredentialEdit>(KEEP_CREDENTIAL)
   const [model, setModel] = useState<string>(data.model ?? '')
 
   const [saving, setSaving] = useState(false)
@@ -46,7 +41,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
   const [models, setModels] = useState<ByokModelInfo[]>(data.models)
   const [probeError, setProbeError] = useState<string | null>(data.test_error)
   const [probeOk, setProbeOk] = useState(!!data.tested_at && !data.test_error)
-  const [probeInputs, setProbeInputs] = useState({ provider: data.provider ?? '', baseUrl: data.base_url ?? '', apiKey: KEY_KEEP })
+  const [probeInputs, setProbeInputs] = useState({ provider: data.provider ?? '', baseUrl: data.base_url ?? '', apiKey: KEEP_CREDENTIAL })
   const probeMatchesDraft = probeInputs.provider === provider && probeInputs.baseUrl === baseUrl && probeInputs.apiKey === apiKey
   const [warnModelId, setWarnModelId] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -55,12 +50,12 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
   useEffect(() => {
     setProvider(data.provider ?? '')
     setBaseUrl(data.base_url ?? '')
-    setApiKey(KEY_KEEP)
+    setApiKey(KEEP_CREDENTIAL)
     setModel(data.model ?? '')
     setModels(data.models)
     setProbeError(data.test_error)
     setProbeOk(!!data.tested_at && !data.test_error)
-    setProbeInputs({ provider: data.provider ?? '', baseUrl: data.base_url ?? '', apiKey: KEY_KEEP })
+    setProbeInputs({ provider: data.provider ?? '', baseUrl: data.base_url ?? '', apiKey: KEEP_CREDENTIAL })
   }, [data])
 
   const providers = data.providers
@@ -71,7 +66,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
 
   const requiresBaseUrl = providerSpec?.requires_base_url ?? false
   const canSubmitProbe = !!provider && (!requiresBaseUrl || !!baseUrl.trim()) && (
-    apiKey === KEY_KEEP ? data.api_key_set : apiKey !== KEY_CLEAR && apiKey.length > 0
+    apiKey.kind === 'unchanged' ? data.api_key_set : apiKey.kind === 'replace'
   )
 
   const onProviderChange = (next: string) => {
@@ -84,7 +79,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
     }
     setModels([])
     setModel('')
-    setApiKey(KEY_KEEP)
+    setApiKey(KEEP_CREDENTIAL)
   }
 
   const runTest = async () => {
@@ -93,7 +88,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
       const res = await insightApi.testByok({
         provider,
         base_url: baseUrl.trim() || null,
-        api_key: apiKey === KEY_KEEP ? null : apiKey,
+        ...credentialField('api_key', apiKey),
       })
       setProbeInputs({ provider, baseUrl, apiKey })
       if (res.data.ok) {
@@ -131,10 +126,10 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
       const res = await insightApi.saveByok({
         provider,
         base_url: baseUrl.trim() || null,
-        api_key: apiKey === KEY_KEEP ? null : apiKey,
+        ...credentialField('api_key', apiKey),
         model: chosenModel,
       })
-      setApiKey(KEY_KEEP)
+      setApiKey(KEEP_CREDENTIAL)
       onChange(res.data)
       setProbeError(res.data.test_error)
       setProbeOk(!res.data.test_error && !!res.data.tested_at)
@@ -157,7 +152,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
   const onSaveClick = () => {
     if (!provider || !model) return
     const chosen = models.find((m) => m.id === model)
-    if (chosen && !chosen.supports_websearch) {
+    if (apiKey.kind !== 'clear' && chosen && !chosen.supports_websearch) {
       setWarnModelId(model)
       return
     }
@@ -177,7 +172,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
       const res = await insightApi.testByok({
         provider,
         base_url: baseUrl.trim() || null,
-        api_key: apiKey === KEY_KEEP ? null : apiKey,
+        ...credentialField('api_key', apiKey),
       })
       setProbeInputs({ provider, baseUrl, apiKey })
       if (!res.data.ok) {
@@ -215,7 +210,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
       setProbeOk(false)
       setProvider('')
       setBaseUrl('')
-      setApiKey(KEY_KEEP)
+      setApiKey(KEEP_CREDENTIAL)
       setModel('')
       setModels([])
       toast.success(t('common.deleted', { defaultValue: 'Deleted' }))
@@ -296,38 +291,10 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
         {/* API key */}
         {provider && (
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground">
-                {t('insight.byok.api_key_label', { defaultValue: 'API key' })}
-              </Label>
-              {data.api_key_set && apiKey === KEY_KEEP && (
-                <span className="inline-flex items-center gap-1 text-xs text-green-500 font-medium">
-                  <Check className="h-3 w-3" />
-                  {data.api_key_masked}
-                </span>
-              )}
-            </div>
-            <div className="relative">
-              <Input
-                type="password"
-                placeholder={data.api_key_set && apiKey === KEY_KEEP
-                  ? t('insight.byok.api_key_placeholder_set', { defaultValue: 'New key to replace...' })
-                  : 'sk-... / sk-ant-...'}
-                value={apiKey === KEY_CLEAR ? '' : apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                className="h-8 font-mono text-xs pr-9"
-              />
-              {data.api_key_set && apiKey === KEY_KEEP && (
-                <button
-                  type="button"
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
-                  onClick={() => setConfirmDelete(true)}
-                  title={t('insight.byok.delete_btn', { defaultValue: 'Remove' })}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
+            <Label htmlFor="byok-api-key" className="text-xs text-muted-foreground">
+              {t('insight.byok.api_key_label', { defaultValue: 'API key' })}
+            </Label>
+            <CredentialInput id="byok-api-key" value={apiKey} stored={data.api_key_set} disabled={saving} onChange={setApiKey} />
           </div>
         )}
 
@@ -350,7 +317,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
                 size="sm"
                 variant="ghost"
                 className="h-8 w-8 p-0"
-                disabled={refreshing}
+                disabled={refreshing || !canSubmitProbe}
                 onClick={refreshModels}
                 title={t('insight.byok.refresh_btn', { defaultValue: 'Refresh model list' })}
               >
@@ -437,7 +404,7 @@ export default function ByokCard({ data, onChange, onAccessChange }: Props) {
             <Button
               size="sm"
               className="h-8"
-              disabled={saving || !provider || !model || !canSubmitProbe}
+              disabled={saving || !provider || !model || (!canSubmitProbe && apiKey.kind !== 'clear')}
               onClick={onSaveClick}
             >
               {saving ? t('common.saving') : t('common.save')}

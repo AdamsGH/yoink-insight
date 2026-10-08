@@ -1,3 +1,4 @@
+import { credentialQuery } from './credentials'
 import { apiClient } from '@core/lib/api-client'
 
 export interface InsightSettings {
@@ -30,9 +31,13 @@ export interface TldrConfig {
   default_model: string
   gateway_base_url: string
   gateway_api_key: string
+  gateway_api_key_set: boolean
   openrouter_api_key: string
+  openrouter_api_key_set: boolean
   ai_route_mode: 'a2a' | 'openrouter' | 'auto'
 }
+
+export type TldrConfigPatch = Partial<Omit<TldrConfig, 'gateway_api_key_set' | 'openrouter_api_key_set'>>
 
 export interface GatewayModel {
   id: string
@@ -96,14 +101,14 @@ export interface ByokConfig {
 export interface ByokConfigUpdate {
   provider: string
   base_url?: string | null
-  api_key?: string | null
+  api_key?: string
   model: string
 }
 
 export interface ByokTestRequest {
   provider: string
   base_url?: string | null
-  api_key?: string | null
+  api_key?: string
 }
 
 export interface ByokTestResponse {
@@ -144,15 +149,11 @@ export const insightApi = {
   getTldrConfig: () =>
     apiClient.get<TldrConfig>('/insight/config/tldr'),
 
-  patchTldrConfig: (body: TldrConfig) =>
+  patchTldrConfig: (body: TldrConfigPatch) =>
     apiClient.patch<TldrConfig>('/insight/config/tldr', body),
 
   listModels: (options: ModelListOptions = {}) => {
-    const params = new URLSearchParams()
-    if (options.url) params.set('url', options.url)
-    if (options.apiKey) params.set('api_key', options.apiKey)
-    const qs = params.toString()
-    return apiClient.get<GatewayModel[]>(`/insight/models${qs ? `?${qs}` : ''}`)
+    return apiClient.get<GatewayModel[]>(`/insight/models${credentialQuery(options.url, options.apiKey)}`)
   },
 
   listOpenRouterModels: async () => {
@@ -164,12 +165,8 @@ export const insightApi = {
   },
 
   testGateway: (url?: string, apiKey?: string) => {
-    const params = new URLSearchParams()
-    if (url) params.set('url', url)
-    if (apiKey) params.set('api_key', apiKey)
-    const qs = params.toString()
     return apiClient.get<{ ok: boolean; error?: string; model_count?: number; url: string }>(
-      `/insight/config/test${qs ? `?${qs}` : ''}`
+      `/insight/config/test${credentialQuery(url, apiKey)}`
     )
   },
 

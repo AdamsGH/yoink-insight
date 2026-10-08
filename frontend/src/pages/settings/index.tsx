@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useGetIdentity } from '@refinedev/core'
 import { BrainCircuit, ChevronDown, FileText, KeyRound, Link, LockKeyhole, MessageCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react'
 
+import CredentialInput from '@insight/components/CredentialInput'
+import { credentialField, KEEP_CREDENTIAL, type CredentialEdit } from '@insight/api/credentials'
 import { insightApi, type ByokConfig, type InsightSettings, type InsightSettingsPatch, type TldrAlias, type TldrAliasInput } from '@insight/api/insight'
 import ByokCard from './ByokCard'
 import GithubLoginDialog from './GithubLoginDialog'
@@ -14,7 +16,7 @@ import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
   Dialog, DialogActions, DialogContent, DialogHeader, DialogTitle,
   Field, FieldDescription, FieldLabel,
-  Input, Label, Switch, Textarea,
+  Label, Switch, Textarea,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
   Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList,
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -469,7 +471,7 @@ export default function InsightSettingsPage() {
   const [tldrModel, setTldrModel] = useState<string | null>(null)
   const [allModels, setAllModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
-  const [githubToken, setGithubToken] = useState<string>('')
+  const [githubToken, setGithubToken] = useState<CredentialEdit>(KEEP_CREDENTIAL)
   const [githubLoginOpen, setGithubLoginOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -521,7 +523,7 @@ export default function InsightSettingsPage() {
         setData(res.data)
         setLang(res.data.lang)
         setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
-        setGithubToken('')
+        setGithubToken(KEEP_CREDENTIAL)
         setUseSearch(res.data.use_search)
         setPromptEdits({})
         setByok(byokRes.data)
@@ -551,11 +553,7 @@ export default function InsightSettingsPage() {
       // github_token writable for any has_tldr_access (gateway or BYOK):
       // GitHub fetch runs inside yoink before the LLM call on both routes.
       if (data?.has_tldr_access) {
-        if (githubToken === '__clear__') {
-          body.github_token = ''
-        } else if (githubToken !== '') {
-          body.github_token = githubToken
-        }
+        Object.assign(body, credentialField('github_token', githubToken))
       }
       if (data?.has_search_gateway_access && useSearch !== null && useSearch !== data.use_search) {
         body.use_search = useSearch
@@ -574,7 +572,7 @@ export default function InsightSettingsPage() {
       setData(res.data)
       setLang(res.data.lang)
       setTldrModel(res.data.tldr_model ?? res.data.tldr_allowed_models[0] ?? '')
-      setGithubToken('')
+      setGithubToken(KEEP_CREDENTIAL)
       setUseSearch(res.data.use_search)
       setPromptEdits({})
       toast.success(t('common.saved'))
@@ -657,7 +655,7 @@ export default function InsightSettingsPage() {
 
   const langDirty = data !== null && lang !== null && lang !== data.lang
   const tldrDirty = data !== null && data.has_tldr_gateway_access && tldrModel !== null && tldrModel !== (data.tldr_model ?? data.tldr_allowed_models[0] ?? '')
-  const githubDirty = data !== null && data.has_tldr_access && githubToken !== ''
+  const githubDirty = data !== null && data.has_tldr_access && githubToken.kind !== 'unchanged'
   const searchDirty = data !== null && data.has_search_gateway_access && useSearch !== null && useSearch !== data.use_search
   const promptsDirty = Object.values(promptEdits).some(v => v !== null)
   const dirty = langDirty || tldrDirty || githubDirty || searchDirty || promptsDirty
@@ -826,7 +824,7 @@ export default function InsightSettingsPage() {
               <CardTitle className="flex items-center gap-2 text-base">
                 <KeyRound className="h-4 w-4 shrink-0 text-primary" />
                 {t('insight.github_token_label', { defaultValue: 'GitHub token' })}
-                {data.github_token_set && githubToken === '' && (
+                {data.github_token_set && githubToken.kind === 'unchanged' && (
                   <span className="text-xs text-green-500 font-medium">&#x2713;</span>
                 )}
               </CardTitle>
@@ -845,29 +843,7 @@ export default function InsightSettingsPage() {
           </CardHeader>
           <CardContent className="px-4 pb-3">
             <div className="space-y-1.5">
-              <div className="relative">
-                <Input
-                  type="password"
-                  placeholder={data.github_token_set && githubToken === ''
-                    ? t('insight.github_token_placeholder_set', { defaultValue: 'New token to replace...' })
-                    : 'ghp_...'}
-                  value={githubToken === '__clear__' ? '' : githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  className="h-8 font-mono text-xs pr-9"
-                />
-                {data.github_token_set && githubToken === '' && (
-                  <button
-                    type="button"
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
-                    onClick={() => setGithubToken('__clear__')}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-              {githubToken === '__clear__' && (
-                <p className="text-xs text-destructive">{t('insight.github_token_will_clear', { defaultValue: 'Token will be removed on save.' })}</p>
-              )}
+              <CredentialInput value={githubToken} stored={data.github_token_set} disabled={saving} onChange={setGithubToken} />
               <p className="text-xs text-muted-foreground">For private repos &amp; rate limits (api.github.com fetch, both gateway and BYOK).</p>
             </div>
           </CardContent>
@@ -882,7 +858,7 @@ export default function InsightSettingsPage() {
             // without requiring a full page reload.
             void insightApi.getSettings().then((res) => {
               setData(res.data)
-              setGithubToken('')
+              setGithubToken(KEEP_CREDENTIAL)
             }).catch(() => {})
           }}
         />

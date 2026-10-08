@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { KeyRound, RefreshCw, X } from 'lucide-react'
 
+import CredentialInput from '@insight/components/CredentialInput'
+import { credentialField, credentialValue, KEEP_CREDENTIAL, type CredentialEdit } from '@insight/api/credentials'
 import { insightApi, type ByokAdminConfig, type GatewayModel, type TldrConfig } from '@insight/api/insight'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, IconButton, Input, Label,
@@ -19,8 +21,8 @@ export default function TldrConfigPage() {
   const [defaultModel, setDefaultModel] = useState('')
   const [modelInput, setModelInput] = useState('')
   const [gatewayUrl, setGatewayUrl] = useState('')
-  const [gatewayKey, setGatewayKey] = useState('')
-  const [openrouterKey, setOpenrouterKey] = useState('')
+  const [gatewayKey, setGatewayKey] = useState<CredentialEdit>(KEEP_CREDENTIAL)
+  const [openrouterKey, setOpenrouterKey] = useState<CredentialEdit>(KEEP_CREDENTIAL)
   const [routeMode, setRouteMode] = useState<TldrConfig['ai_route_mode']>('auto')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -46,8 +48,8 @@ export default function TldrConfigPage() {
             : configuredModels[0] ?? ''
         )
         setGatewayUrl(cfgRes.data.gateway_base_url)
-        setGatewayKey(cfgRes.data.gateway_api_key)
-        setOpenrouterKey(cfgRes.data.openrouter_api_key)
+        setGatewayKey(KEEP_CREDENTIAL)
+        setOpenrouterKey(KEEP_CREDENTIAL)
         setRouteMode(cfgRes.data.ai_route_mode)
         setByokAdmin(byokRes.data)
         try {
@@ -55,7 +57,6 @@ export default function TldrConfigPage() {
             ? await insightApi.listOpenRouterModels()
             : await insightApi.listModels({
                 url: cfgRes.data.gateway_base_url,
-                apiKey: cfgRes.data.gateway_api_key || undefined,
               })
           setAllModels(modelsRes.data)
         } catch {
@@ -83,13 +84,13 @@ export default function TldrConfigPage() {
     setTesting(true)
     setTestResult(null)
     try {
-      const res = await insightApi.testGateway(gatewayUrl, gatewayKey || undefined)
+      const res = await insightApi.testGateway(gatewayUrl, credentialValue(gatewayKey))
       setTestResult(res.data)
       if (res.data.ok) {
         try {
           const modelsRes = await insightApi.listModels({
             url: gatewayUrl,
-            apiKey: gatewayKey || undefined,
+            apiKey: credentialValue(gatewayKey),
           })
           setAllModels(modelsRes.data)
         } catch {
@@ -108,7 +109,7 @@ export default function TldrConfigPage() {
     try {
       const res = routeMode === 'openrouter'
         ? await insightApi.listOpenRouterModels()
-        : await insightApi.listModels({ url: gatewayUrl, apiKey: gatewayKey || undefined })
+        : await insightApi.listModels({ url: gatewayUrl, apiKey: credentialValue(gatewayKey) })
       setAllModels(res.data)
       toast.success(t('insight.tldr_models_loaded', { count: res.data.length }))
     } catch {
@@ -157,17 +158,18 @@ export default function TldrConfigPage() {
         allowed_models: allowed,
         default_model: defaultModel,
         gateway_base_url: gatewayUrl,
-        gateway_api_key: gatewayKey,
-        openrouter_api_key: openrouterKey,
+        ...credentialField('gateway_api_key', gatewayKey),
+        ...credentialField('openrouter_api_key', openrouterKey),
         ai_route_mode: routeMode,
       })
       setConfig(res.data)
       setAllowed(res.data.allowed_models)
       setDefaultModel(res.data.default_model)
       setGatewayUrl(res.data.gateway_base_url)
-      setGatewayKey(res.data.gateway_api_key)
-      setOpenrouterKey(res.data.openrouter_api_key)
+      setGatewayKey(KEEP_CREDENTIAL)
+      setOpenrouterKey(KEEP_CREDENTIAL)
       setRouteMode(res.data.ai_route_mode)
+      setTestResult(null)
       toast.success(t('common.saved'))
     } catch {
       toast.error(t('common.load_error'))
@@ -189,8 +191,8 @@ export default function TldrConfigPage() {
     JSON.stringify([...allowed].sort()) !== JSON.stringify([...config.allowed_models].sort()) ||
     defaultModel !== config.default_model ||
     gatewayUrl !== config.gateway_base_url ||
-    gatewayKey !== config.gateway_api_key ||
-    openrouterKey !== config.openrouter_api_key ||
+    gatewayKey.kind !== 'unchanged' ||
+    openrouterKey.kind !== 'unchanged' ||
     routeMode !== config.ai_route_mode
   )
 
@@ -276,13 +278,12 @@ export default function TldrConfigPage() {
                 <Label htmlFor="tldr-gateway-key" className="text-xs text-muted-foreground">
                   {t('insight.tldr_gateway_key_label', { defaultValue: 'A2A API key' })}
                 </Label>
-                <Input
+                <CredentialInput
                   id="tldr-gateway-key"
                   value={gatewayKey}
-                  onChange={(e) => { setGatewayKey(e.target.value); setTestResult(null) }}
-                  placeholder={t('insight.tldr_gateway_key_placeholder', { defaultValue: 'Leave empty if not required' })}
-                  type="password"
-                  className="font-mono text-xs"
+                  stored={config?.gateway_api_key_set ?? false}
+                  disabled={saving}
+                  onChange={(next) => { setGatewayKey(next); setTestResult(null) }}
                 />
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -310,13 +311,12 @@ export default function TldrConfigPage() {
               <Label htmlFor="tldr-openrouter-key" className="text-xs text-muted-foreground">
                 {t('insight.tldr_openrouter_key_label')}
               </Label>
-              <Input
+              <CredentialInput
                 id="tldr-openrouter-key"
                 value={openrouterKey}
-                onChange={(e) => setOpenrouterKey(e.target.value)}
-                type="password"
-                className="font-mono text-xs"
-                placeholder={t('insight.tldr_openrouter_key_placeholder')}
+                stored={config?.openrouter_api_key_set ?? false}
+                disabled={saving}
+                onChange={setOpenrouterKey}
               />
             </div>
           )}
